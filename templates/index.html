@@ -14,21 +14,24 @@
         .user-message { background: #e2e8f0; padding: 10px; border-radius: 10px; }
         .assistant-message { background: #3b82f6; color: white; padding: 10px; border-radius: 10px; }
         .sql-box { background: #1e293b; color: #e2e8f0; padding: 10px; border-radius: 5px; font-family: monospace; }
+        .dashboard-btn.active { background-color: #3b82f6; color: white; border-color: #3b82f6; }
+        .suggestion-chip { background: #e2e8f0; padding: 5px 10px; border-radius: 20px; cursor: pointer; margin-right: 5px; margin-bottom: 5px; display: inline-block; }
+        .suggestion-chip:hover { background: #cbd5e1; }
     </style>
 </head>
 <body>
     <div class="container-fluid">
         <div class="row">
-            <!-- Sidebar with dummy Tableau dashboards -->
+            <!-- Sidebar with dashboards and filters -->
             <div class="col-md-3 sidebar p-3">
                 <h3>🎥 Foundry Vantage</h3>
                 <p class="text-muted">AI-powered data assistant</p>
                 <hr>
                 <h5>📊 Sample Reports</h5>
-                <div class="list-group">
-                    <button class="list-group-item list-group-item-action" onclick="loadDashboard('executive')">Executive Content Dashboard</button>
-                    <button class="list-group-item list-group-item-action" onclick="loadDashboard('workorders')">Work Order Tracker</button>
-                    <button class="list-group-item list-group-item-action" onclick="loadDashboard('deals')">Deals Performance Dashboard</button>
+                <div class="list-group" id="dashboard-buttons">
+                    <button class="list-group-item list-group-item-action dashboard-btn active" data-dashboard="executive">Executive Content Dashboard</button>
+                    <button class="list-group-item list-group-item-action dashboard-btn" data-dashboard="workorders">Work Order Tracker</button>
+                    <button class="list-group-item list-group-item-action dashboard-btn" data-dashboard="deals">Deals Performance Dashboard</button>
                 </div>
                 <div class="mt-3" id="dashboard-container">
                     <canvas id="dashboardChart"></canvas>
@@ -51,6 +54,11 @@
                         <option>content planning</option>
                         <option>deals</option>
                     </select>
+                </div>
+                <hr>
+                <div id="suggestions">
+                    <h6>💡 Suggested queries for this dashboard:</h6>
+                    <div id="suggestion-list"></div>
                 </div>
             </div>
 
@@ -88,20 +96,23 @@
     </div>
 
     <script>
-        function sendQuestion() {
-            const question = document.getElementById('question').value;
-            if (!question) return;
+        // Current active dashboard
+        let activeDashboard = 'executive';
 
-            fetch('/ask', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({question: question})
-            })
-            .then(res => res.json())
-            .then(data => {
-                window.location.reload();
+        // Dashboard button click handling
+        document.querySelectorAll('.dashboard-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                document.querySelectorAll('.dashboard-btn').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                activeDashboard = this.getAttribute('data-dashboard');
+                loadDashboard(activeDashboard);
+                updateSuggestions(activeDashboard);
             });
-        }
+        });
+
+        // Load initial dashboard
+        loadDashboard(activeDashboard);
+        updateSuggestions(activeDashboard);
 
         function loadDashboard(name) {
             fetch(`/dashboards/${name}`)
@@ -136,6 +147,58 @@
                     });
                 }
             });
+        }
+
+        function updateSuggestions(dashboard) {
+            const suggestions = {
+                executive: [
+                    "Show me all content for MAX Australia",
+                    "How many content items are Not Ready?",
+                    "List scheduled content for MAX US"
+                ],
+                workorders: [
+                    "Show me all delayed work orders",
+                    "How many work orders are In Progress?",
+                    "List work orders for Vendor A"
+                ],
+                deals: [
+                    "Show me all active deals",
+                    "How many deals are pending approval?",
+                    "List top vendors by deal value"
+                ]
+            };
+            const list = document.getElementById('suggestion-list');
+            list.innerHTML = '';
+            (suggestions[dashboard] || []).forEach(q => {
+                const chip = document.createElement('span');
+                chip.className = 'suggestion-chip';
+                chip.textContent = q;
+                chip.onclick = () => {
+                    document.getElementById('question').value = q;
+                    sendQuestion();
+                };
+                list.appendChild(chip);
+            });
+        }
+
+        function sendQuestion() {
+            const question = document.getElementById('question').value;
+            if (!question) return;
+
+            const region = document.getElementById('region').value;
+            const team = document.getElementById('team').value;
+            const dashboard = activeDashboard;
+
+            fetch('/ask', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({question, region, team, dashboard})
+            })
+            .then(res => res.json())
+            .then(data => {
+                window.location.reload();
+            })
+            .catch(err => console.error(err));
         }
 
         // Auto-scroll chat to bottom
