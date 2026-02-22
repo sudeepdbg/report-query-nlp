@@ -142,7 +142,9 @@ chat_history = []
 @app.route('/')
 def index():
     """Render the main chat interface."""
-    return render_template('index.html', chat_history=chat_history)
+    region = request.args.get('region', 'NA')
+    team = request.args.get('team', 'leadership')
+    return render_template('index.html', chat_history=chat_history, current_region=region, current_team=team)
 
 @app.route('/ask', methods=['POST'])
 def ask():
