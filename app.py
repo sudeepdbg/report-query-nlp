@@ -162,20 +162,32 @@ def ask():
 def dashboard(name):
     """Return chart data for the sidebar dashboards."""
     if name == 'executive':
-        df = pd.read_sql_query("SELECT status, COUNT(*) as count FROM content_planning GROUP BY status", 'vantage.db')
+        sql = "SELECT status, COUNT(*) as count FROM content_planning GROUP BY status"
+        df, error = execute_sql(sql)
+        if error:
+            return jsonify({'error': f'Database error: {error}'}), 500
         labels = df['status'].tolist()
         values = df['count'].tolist()
         return jsonify({'type': 'pie', 'labels': labels, 'values': values, 'title': 'Content Status'})
+    
     elif name == 'workorders':
-        df = pd.read_sql_query("SELECT status, COUNT(*) as count FROM work_orders GROUP BY status", 'vantage.db')
+        sql = "SELECT status, COUNT(*) as count FROM work_orders GROUP BY status"
+        df, error = execute_sql(sql)
+        if error:
+            return jsonify({'error': f'Database error: {error}'}), 500
         labels = df['status'].tolist()
         values = df['count'].tolist()
         return jsonify({'type': 'bar', 'labels': labels, 'values': values, 'title': 'Work Orders by Status'})
+    
     elif name == 'deals':
-        df = pd.read_sql_query("SELECT vendor, SUM(deal_value) as total FROM deals GROUP BY vendor", 'vantage.db')
+        sql = "SELECT vendor, SUM(deal_value) as total FROM deals GROUP BY vendor"
+        df, error = execute_sql(sql)
+        if error:
+            return jsonify({'error': f'Database error: {error}'}), 500
         labels = df['vendor'].tolist()
         values = df['total'].tolist()
         return jsonify({'type': 'bar', 'labels': labels, 'values': values, 'title': 'Deals by Vendor'})
+    
     else:
         return jsonify({'error': 'Dashboard not found'}), 404
 
