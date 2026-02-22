@@ -1,99 +1,257 @@
-import re
+import os
 import sqlite3
 import pandas as pd
+import random
+from flask import Flask, render_template, request, jsonify
+from datetime import datetime
+import logging
 
-def parse_query(question, region='NA', team='leadership', dashboard='executive'):
-    """
-    Convert natural language to SQL using rules, with filters.
-    Returns (sql, error_message) – error_message is None if successful.
-    """
-    q = question.lower().strip()
-    
-    # Helper to add region filter if applicable
-    def add_region_filter(sql, table):
-        if region and region != 'GLOBAL':
-            if 'WHERE' in sql:
-                sql += f" AND {table}.region = '{region}'"
-            else:
-                sql += f" WHERE {table}.region = '{region}'"
-        return sql
-    
-    # --- Count queries ---
-    if re.search(r'how many|count', q):
-        if re.search(r'delayed|at risk', q):
-            table = 'work_orders'
-            condition = "status = 'Delayed'"
-        elif re.search(r'max australia|max au', q):
-            table = 'content_planning'
-            condition = "network = 'MAX Australia'"
-        elif re.search(r'max us', q):
-            table = 'content_planning'
-            condition = "network = 'MAX US'"
-        elif re.search(r'active deals', q):
-            table = 'deals'
-            condition = "status = 'Active'"
-        elif re.search(r'pending approval', q):
-            table = 'deals'
-            condition = "status = 'Pending'"
-        elif re.search(r'in progress', q):
-            table = 'work_orders'
-            condition = "status = 'In Progress'"
-        else:
-            return None, "I couldn't understand what to count."
-        
-        sql = f"SELECT COUNT(*) FROM {table} WHERE {condition}"
-        sql = add_region_filter(sql, table)
-        return sql, None
-    
-    # --- List queries ---
-    if re.search(r'show|list|get|what', q):
-        # Special case: top vendors
-        if re.search(r'vendor a', q) or re.search(r'top vendors', q):
-            sql = "SELECT vendor, COUNT(*) as count FROM work_orders"
-            if region and region != 'GLOBAL':
-                sql += f" WHERE region = '{region}'"
-            sql += " GROUP BY vendor ORDER BY count DESC"
-            return sql, None
-        
-        if re.search(r'delayed|at risk', q):
-            table = 'work_orders'
-            condition = "status = 'Delayed'"
-        elif re.search(r'max australia', q):
-            table = 'content_planning'
-            condition = "network = 'MAX Australia'"
-        elif re.search(r'max us', q):
-            table = 'content_planning'
-            condition = "network = 'MAX US'"
-        elif re.search(r'active deals', q):
-            table = 'deals'
-            condition = "status = 'Active'"
-        elif re.search(r'pending approval', q):
-            table = 'deals'
-            condition = "status = 'Pending'"
-        elif re.search(r'in progress', q):
-            table = 'work_orders'
-            condition = "status = 'In Progress'"
-        elif re.search(r'not ready', q):
-            table = 'content_planning'
-            condition = "status = 'Not Ready'"
-        else:
-            return None, "I couldn't understand what to list."
-        
-        sql = f"SELECT * FROM {table} WHERE {condition}"
-        sql = add_region_filter(sql, table)
-        return sql, None
-    
-    return None, "I couldn't understand that query. Please try rephrasing."
+# Import rule-based parser
+from query_parser import parse_query, execute_sql
 
-def execute_sql(sql):
-    """Execute SQL and return (DataFrame, error)."""
-    conn = None
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+
+# ------------------------------------------------------------------
+# Database initialization (runs once at startup)
+# ------------------------------------------------------------------
+def init_database():
+    """Create tables and insert enriched sample data."""
+    logger.info("Initializing database...")
+    conn = sqlite3.connect('vantage.db')
+    c = conn.cursor()
+    
+    # Content Planning table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS content_planning (
+            id INTEGER PRIMARY KEY,
+            network TEXT,
+            content_title TEXT,
+            status TEXT,
+            planned_date TEXT,
+            region TEXT
+        )
+    ''')
+    
+    # Work Orders table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS work_orders (
+            id INTEGER PRIMARY KEY,
+            work_order TEXT,
+            offering TEXT,
+            status TEXT,
+            due_date TEXT,
+            region TEXT,
+            vendor TEXT,
+            priority TEXT
+        )
+    ''')
+    
+    # Deals table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS deals (
+            id INTEGER PRIMARY KEY,
+            deal_name TEXT,
+            vendor TEXT,
+            deal_value REAL,
+            deal_date TEXT,
+            region TEXT,
+            status TEXT
+        )
+    ''')
+    
+    # Clear existing data (for demo)
+    c.execute("DELETE FROM content_planning")
+    c.execute("DELETE FROM work_orders")
+    c.execute("DELETE FROM deals")
+    
+    # --- Enriched content planning data ---
+    content_titles = [
+        ("MAX US", "House of the Dragon S2", "Fulfilled", "NA"),
+        ("MAX US", "The Penguin", "Not Ready", "NA"),
+        ("MAX US", "The Last of Us S2", "Scheduled", "NA"),
+        ("MAX US", "Dune: Prophecy", "Delivered", "NA"),
+        ("MAX Europe", "The White Lotus S3", "Scheduled", "EMEA"),
+        ("MAX Europe", "Industry S3", "Fulfilled", "EMEA"),
+        ("MAX Europe", "Euphoria S3", "Not Ready", "EMEA"),
+        ("MAX Australia", "The Last Kingdom", "Delivered", "APAC"),
+        ("MAX Australia", "Dune: Prophecy", "Scheduled", "APAC"),
+        ("MAX Australia", "The Gilded Age", "Fulfilled", "APAC"),
+        ("MAX LatAm", "El Encargado", "Delivered", "LATAM"),
+        ("MAX LatAm", "Iosi, el espía arrepentido", "Scheduled", "LATAM"),
+        ("MAX Asia", "Oppenheimer", "Fulfilled", "APAC"),
+        ("MAX Asia", "Godzilla Minus One", "Not Ready", "APAC"),
+    ]
+    for i, (net, title, status, reg) in enumerate(content_titles, start=1):
+        c.execute('''
+            INSERT INTO content_planning (id, network, content_title, status, planned_date, region)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (i, net, title, status, f"2024-{i%12+1:02d}-{i%28+1:02d}", reg))
+    
+    # --- Enriched work orders ---
+    vendors = ["Vendor A", "Vendor B", "Vendor C", "Vendor D", "Vendor E"]
+    statuses = ["Delayed", "In Progress", "Completed", "Pending Review"]
+    regions = ["NA", "APAC", "EMEA", "LATAM"]
+    priorities = ["A", "B", "C"]
+    
+    for i in range(1, 21):
+        wo = f"WO-2024-{i:03d}"
+        offering = f"MAX {random.choice(regions)} - {random.choice(['Migration', 'Encoding', 'Subtitle', 'QC Review', 'Audio'])}"
+        status = random.choice(statuses)
+        due = f"2024-{i%12+1:02d}-{i%28+1:02d}"
+        region = random.choice(regions)
+        vendor = random.choice(vendors)
+        priority = random.choice(priorities)
+        c.execute('''
+            INSERT INTO work_orders (id, work_order, offering, status, due_date, region, vendor, priority)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (i, wo, offering, status, due, region, vendor, priority))
+    
+    # --- Enriched deals ---
+    deal_names = [
+        "Warner Bros 2024 Package", "BBC Studios Renewal", "Sony Pictures Deal",
+        "Paramount Animation", "Studio Ghibli Classics", "A24 Film Slate",
+        "Discovery+ Originals", "HBO Max Acquisitions", "CNN International",
+        "Cartoon Network Library", "Adult Swim Series", "TNT Sports Rights",
+        "TBS Comedy Specials", "Rooster Teeth Collection", "DC Universe Animated"
+    ]
+    vendors_deals = ["Warner Bros", "BBC", "Sony", "Paramount", "Ghibli", "A24", "Discovery", "HBO", "CNN", "Cartoon Network", "Adult Swim", "TNT Sports", "TBS", "Rooster Teeth", "DC"]
+    statuses_deal = ["Active", "Completed", "Pending"]
+    
+    for i, (name, vendor) in enumerate(zip(deal_names, vendors_deals), start=1):
+        value = round(random.uniform(500000, 5000000), 2)
+        date = f"2024-{i%12+1:02d}-{i%28+1:02d}"
+        region = random.choice(regions)
+        status = random.choice(statuses_deal)
+        c.execute('''
+            INSERT INTO deals (id, deal_name, vendor, deal_value, deal_date, region, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (i, name, vendor, value, date, region, status))
+    
+    conn.commit()
+    conn.close()
+    logger.info("✅ Database initialized with enriched sample data.")
+
+# Initialize database
+init_database()
+
+# In-memory chat history
+chat_history = []
+
+# ------------------------------------------------------------------
+# Routes
+# ------------------------------------------------------------------
+@app.route('/')
+def index():
+    """Render the main chat interface."""
+    return render_template('index.html', chat_history=chat_history)
+
+@app.route('/ask', methods=['POST'])
+def ask():
+    """Process a natural language query with filters."""
     try:
-        conn = sqlite3.connect('vantage.db')
-        df = pd.read_sql_query(sql, conn)
-        return df, None
+        data = request.json
+        question = data.get('question', '')
+        region = data.get('region', 'NA')
+        team = data.get('team', 'leadership')
+        dashboard = data.get('dashboard', 'executive')
+        
+        logger.info(f"Ask: question='{question}', region={region}, team={team}, dashboard={dashboard}")
+        
+        if not question:
+            return jsonify({'error': 'No question provided'}), 400
+        
+        # Parse query
+        sql, error = parse_query(question, region, team, dashboard)
+        if error:
+            logger.warning(f"Parse error: {error}")
+            return jsonify({
+                'answer': error,
+                'sql': None,
+                'data': None
+            })
+        
+        logger.info(f"Generated SQL: {sql}")
+        
+        # Execute SQL
+        df, exec_error = execute_sql(sql)
+        if exec_error:
+            logger.error(f"SQL execution error: {exec_error}")
+            return jsonify({
+                'answer': f"Query execution failed: {exec_error}",
+                'sql': sql,
+                'data': None
+            })
+        
+        # Format response
+        if df.empty:
+            answer = "No results found."
+            data = None
+        elif len(df) == 1 and df.shape[1] == 1:
+            answer = f"**Result:** {df.iloc[0,0]}"
+            data = None
+        else:
+            answer = f"Found **{len(df)}** results:"
+            data = df.to_html(classes='table table-striped', index=False)
+        
+        chat_entry = {
+            'question': question,
+            'answer': answer,
+            'sql': sql,
+            'data': data
+        }
+        chat_history.append(chat_entry)
+        
+        return jsonify(chat_entry)
     except Exception as e:
-        return None, str(e)
-    finally:
-        if conn:
-            conn.close()
+        logger.exception("Unhandled exception in /ask")
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+@app.route('/dashboards/<name>')
+def dashboard(name):
+    """Return chart data for the sidebar dashboards."""
+    try:
+        if name == 'executive':
+            sql = "SELECT status, COUNT(*) as count FROM content_planning GROUP BY status"
+        elif name == 'workorders':
+            sql = "SELECT status, COUNT(*) as count FROM work_orders GROUP BY status"
+        elif name == 'deals':
+            sql = "SELECT vendor, SUM(deal_value) as total FROM deals GROUP BY vendor"
+        else:
+            return jsonify({'error': 'Dashboard not found'}), 404
+        
+        logger.info(f"Dashboard {name} SQL: {sql}")
+        df, error = execute_sql(sql)
+        if error:
+            logger.error(f"Dashboard error: {error}")
+            return jsonify({'error': f'Database error: {error}'}), 500
+        
+        if name == 'executive':
+            labels = df['status'].tolist()
+            values = df['count'].tolist()
+            return jsonify({'type': 'pie', 'labels': labels, 'values': values, 'title': 'Content Status'})
+        elif name == 'workorders':
+            labels = df['status'].tolist()
+            values = df['count'].tolist()
+            return jsonify({'type': 'bar', 'labels': labels, 'values': values, 'title': 'Work Orders by Status'})
+        elif name == 'deals':
+            labels = df['vendor'].tolist()
+            values = df['total'].tolist()
+            return jsonify({'type': 'bar', 'labels': labels, 'values': values, 'title': 'Deals by Vendor'})
+    except Exception as e:
+        logger.exception(f"Unhandled exception in /dashboards/{name}")
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+@app.route('/healthz')
+def health_check():
+    return jsonify({
+        'status': 'ok',
+        'timestamp': datetime.now().isoformat(),
+        'service': 'Foundry Vantage'
+    })
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
