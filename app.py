@@ -5,16 +5,16 @@ from flask import Flask, render_template, request, jsonify
 from datetime import datetime
 import json
 
-# Import your rule-based query parser (should be in same directory)
+# Import enhanced parser
 from query_parser import parse_query, execute_sql
 
 app = Flask(__name__)
 
 # ------------------------------------------------------------------
-# Database initialization (runs once at startup)
+# Database initialization (runs once at startup) – using enriched data
 # ------------------------------------------------------------------
 def init_database():
-    """Create tables and insert sample data if they don't exist."""
+    """Create tables and insert enriched sample data."""
     conn = sqlite3.connect('vantage.db')
     c = conn.cursor()
     
@@ -57,45 +57,80 @@ def init_database():
         )
     ''')
     
-    # Sample data (only insert if empty)
-    c.execute("SELECT COUNT(*) FROM content_planning")
-    if c.fetchone()[0] == 0:
-        sample_content = [
-            (1, 'MAX Australia', 'The Last Kingdom', 'Delivered', '2024-03-15', 'APAC'),
-            (2, 'MAX Australia', 'Dune: Prophecy', 'Scheduled', '2024-04-01', 'APAC'),
-            (3, 'MAX US', 'House of the Dragon S2', 'Fulfilled', '2024-05-20', 'NA'),
-            (4, 'MAX US', 'The Penguin', 'Not Ready', '2024-06-10', 'NA'),
-            (5, 'MAX Europe', 'The White Lotus S3', 'Scheduled', '2024-07-01', 'EMEA')
-        ]
-        c.executemany("INSERT INTO content_planning VALUES (?,?,?,?,?,?)", sample_content)
+    # Clear existing data (for demo, we regenerate each time)
+    c.execute("DELETE FROM content_planning")
+    c.execute("DELETE FROM work_orders")
+    c.execute("DELETE FROM deals")
     
-    c.execute("SELECT COUNT(*) FROM work_orders")
-    if c.fetchone()[0] == 0:
-        sample_orders = [
-            (1, 'WO-2024-001', 'MAX Australia - Migration', 'Delayed', '2024-03-20', 'APAC', 'Vendor A', 'A'),
-            (2, 'WO-2024-002', 'MAX US - Encoding', 'In Progress', '2024-03-25', 'NA', 'Vendor B', 'A'),
-            (3, 'WO-2024-003', 'MAX Europe - Subtitle', 'Completed', '2024-02-15', 'EMEA', 'Vendor C', 'B'),
-            (4, 'WO-2024-004', 'MAX US - QC Review', 'In Progress', '2024-03-30', 'NA', 'Vendor B', 'A'),
-            (5, 'WO-2024-005', 'MAX Australia - Audio', 'Delayed', '2024-03-10', 'APAC', 'Vendor A', 'A')
-        ]
-        c.executemany("INSERT INTO work_orders VALUES (?,?,?,?,?,?,?,?)", sample_orders)
+    # --- Enriched content planning data ---
+    content_titles = [
+        ("MAX US", "House of the Dragon S2", "Fulfilled", "NA"),
+        ("MAX US", "The Penguin", "Not Ready", "NA"),
+        ("MAX US", "The Last of Us S2", "Scheduled", "NA"),
+        ("MAX US", "Dune: Prophecy", "Delivered", "NA"),
+        ("MAX Europe", "The White Lotus S3", "Scheduled", "EMEA"),
+        ("MAX Europe", "Industry S3", "Fulfilled", "EMEA"),
+        ("MAX Europe", "Euphoria S3", "Not Ready", "EMEA"),
+        ("MAX Australia", "The Last Kingdom", "Delivered", "APAC"),
+        ("MAX Australia", "Dune: Prophecy", "Scheduled", "APAC"),
+        ("MAX Australia", "The Gilded Age", "Fulfilled", "APAC"),
+        ("MAX LatAm", "El Encargado", "Delivered", "LATAM"),
+        ("MAX LatAm", "Iosi, el espía arrepentido", "Scheduled", "LATAM"),
+        ("MAX Asia", "Oppenheimer", "Fulfilled", "APAC"),
+        ("MAX Asia", "Godzilla Minus One", "Not Ready", "APAC"),
+    ]
+    for i, (net, title, status, reg) in enumerate(content_titles, start=1):
+        c.execute('''
+            INSERT INTO content_planning (id, network, content_title, status, planned_date, region)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (i, net, title, status, f"2024-{i%12+1:02d}-{i%28+1:02d}", reg))
     
-    c.execute("SELECT COUNT(*) FROM deals")
-    if c.fetchone()[0] == 0:
-        sample_deals = [
-            (1, 'Warner Bros 2024 Package', 'Warner Bros', 1500000, '2024-02-01', 'NA', 'Active'),
-            (2, 'BBC Studios Renewal', 'BBC', 850000, '2024-02-15', 'EMEA', 'Completed'),
-            (3, 'Sony Pictures Deal', 'Sony', 2200000, '2024-03-01', 'APAC', 'Pending'),
-            (4, 'Paramount Animation', 'Paramount', 1200000, '2024-02-20', 'NA', 'Active'),
-            (5, 'Studio Ghibli Classics', 'Ghibli', 650000, '2024-01-30', 'APAC', 'Completed')
-        ]
-        c.executemany("INSERT INTO deals VALUES (?,?,?,?,?,?,?)", sample_deals)
+    # --- Enriched work orders ---
+    vendors = ["Vendor A", "Vendor B", "Vendor C", "Vendor D", "Vendor E"]
+    statuses = ["Delayed", "In Progress", "Completed", "Pending Review"]
+    regions = ["NA", "APAC", "EMEA", "LATAM"]
+    priorities = ["A", "B", "C"]
+    
+    for i in range(1, 21):
+        wo = f"WO-2024-{i:03d}"
+        offering = f"MAX {random.choice(regions)} - {random.choice(['Migration', 'Encoding', 'Subtitle', 'QC Review', 'Audio'])}"
+        status = random.choice(statuses)
+        due = f"2024-{i%12+1:02d}-{i%28+1:02d}"
+        region = random.choice(regions)
+        vendor = random.choice(vendors)
+        priority = random.choice(priorities)
+        c.execute('''
+            INSERT INTO work_orders (id, work_order, offering, status, due_date, region, vendor, priority)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (i, wo, offering, status, due, region, vendor, priority))
+    
+    # --- Enriched deals ---
+    deal_names = [
+        "Warner Bros 2024 Package", "BBC Studios Renewal", "Sony Pictures Deal",
+        "Paramount Animation", "Studio Ghibli Classics", "A24 Film Slate",
+        "Discovery+ Originals", "HBO Max Acquisitions", "CNN International",
+        "Cartoon Network Library", "Adult Swim Series", "TNT Sports Rights",
+        "TBS Comedy Specials", "Rooster Teeth Collection", "DC Universe Animated"
+    ]
+    vendors_deals = ["Warner Bros", "BBC", "Sony", "Paramount", "Ghibli", "A24", "Discovery", "HBO", "CNN", "Cartoon Network", "Adult Swim", "TNT Sports", "TBS", "Rooster Teeth", "DC"]
+    statuses_deal = ["Active", "Completed", "Pending"]
+    
+    for i, (name, vendor) in enumerate(zip(deal_names, vendors_deals), start=1):
+        value = round(random.uniform(500000, 5000000), 2)
+        date = f"2024-{i%12+1:02d}-{i%28+1:02d}"
+        region = random.choice(regions)
+        status = random.choice(statuses_deal)
+        c.execute('''
+            INSERT INTO deals (id, deal_name, vendor, deal_value, deal_date, region, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (i, name, vendor, value, date, region, status))
     
     conn.commit()
     conn.close()
-    print("✅ Database initialized with sample data.")
+    print("✅ Database initialized with enriched sample data.")
 
-# Initialize the database when the app starts
+# Need random module
+import random
 init_database()
 
 # In-memory chat history (for demo only; lost on restart)
@@ -111,25 +146,30 @@ def index():
 
 @app.route('/ask', methods=['POST'])
 def ask():
-    """Process a natural language query and return results."""
-    question = request.json.get('question', '')
+    """Process a natural language query and return results, with filters."""
+    data = request.json
+    question = data.get('question', '')
+    region = data.get('region', 'NA')
+    team = data.get('team', 'leadership')
+    dashboard = data.get('dashboard', 'executive')  # which dashboard is active
+    
     if not question:
         return jsonify({'error': 'No question provided'}), 400
     
-    # Parse query using rule-based engine
-    sql = parse_query(question)
-    if sql is None:
+    # Parse query using rule-based engine, passing filters
+    sql, error = parse_query(question, region, team, dashboard)
+    if error:
         return jsonify({
-            'answer': "I couldn't understand that query. Please try rephrasing.",
+            'answer': error,
             'sql': None,
             'data': None
         })
     
     # Execute SQL
-    df, error = execute_sql(sql)
-    if error:
+    df, exec_error = execute_sql(sql)
+    if exec_error:
         return jsonify({
-            'answer': f"Query execution failed: {error}",
+            'answer': f"Query execution failed: {exec_error}",
             'sql': sql,
             'data': None
         })
@@ -139,12 +179,10 @@ def ask():
         answer = "No results found."
         data = None
     elif len(df) == 1 and df.shape[1] == 1:
-        # Single value answer (e.g., count)
         answer = f"**Result:** {df.iloc[0,0]}"
         data = None
     else:
         answer = f"Found **{len(df)}** results:"
-        # Convert DataFrame to HTML table with Bootstrap classes
         data = df.to_html(classes='table table-striped', index=False)
     
     # Store in chat history
@@ -193,15 +231,12 @@ def dashboard(name):
 
 @app.route('/healthz')
 def health_check():
-    """Health check endpoint for uptime monitoring (Render, UptimeRobot, etc.)."""
+    """Health check endpoint for uptime monitoring."""
     return jsonify({
         'status': 'ok',
         'timestamp': datetime.now().isoformat(),
         'service': 'Foundry Vantage'
     })
 
-# ------------------------------------------------------------------
-# Run the app (only for local development; on Render, use gunicorn)
-# ------------------------------------------------------------------
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
