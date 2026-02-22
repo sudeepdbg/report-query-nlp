@@ -1,1 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Foundry Vantage</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background: #f8fafc; }
+        .sidebar { background: white; border-right: 1px solid #e2e8f0; min-height: 100vh; }
+        .main { padding: 20px; }
+        .chat-message { margin-bottom: 15px; }
+        .user-message { background: #e2e8f0; padding: 10px; border-radius: 10px; }
+        .assistant-message { background: #3b82f6; color: white; padding: 10px; border-radius: 10px; }
+        .sql-box { background: #1e293b; color: #e2e8f0; padding: 10px; border-radius: 5px; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <!-- Sidebar with dummy Tableau dashboards -->
+            <div class="col-md-3 sidebar p-3">
+                <h3>🎥 Foundry Vantage</h3>
+                <p class="text-muted">AI-powered data assistant</p>
+                <hr>
+                <h5>📊 Sample Reports</h5>
+                <div class="list-group">
+                    <button class="list-group-item list-group-item-action" onclick="loadDashboard('executive')">Executive Content Dashboard</button>
+                    <button class="list-group-item list-group-item-action" onclick="loadDashboard('workorders')">Work Order Tracker</button>
+                    <button class="list-group-item list-group-item-action" onclick="loadDashboard('deals')">Deals Performance Dashboard</button>
+                </div>
+                <div class="mt-3" id="dashboard-container">
+                    <canvas id="dashboardChart"></canvas>
+                </div>
+                <hr>
+                <div class="mt-3">
+                    <label>Default Region</label>
+                    <select id="region" class="form-select">
+                        <option>NA</option>
+                        <option>APAC</option>
+                        <option>EMEA</option>
+                        <option>LATAM</option>
+                    </select>
+                </div>
+                <div class="mt-2">
+                    <label>Team</label>
+                    <select id="team" class="form-select">
+                        <option>leadership</option>
+                        <option>product</option>
+                        <option>content planning</option>
+                        <option>deals</option>
+                    </select>
+                </div>
+            </div>
 
+            <!-- Main chat area -->
+            <div class="col-md-9 main">
+                <h2>🔍 Ask Foundry Vantage</h2>
+                <p class="text-muted">Natural language queries for media supply chain data</p>
+
+                <div id="chat-box" style="height: 400px; overflow-y: scroll; border: 1px solid #e2e8f0; padding: 10px; border-radius: 5px;">
+                    {% for msg in chat_history %}
+                        <div class="chat-message">
+                            <div class="user-message"><strong>You:</strong> {{ msg.question }}</div>
+                            <div class="assistant-message mt-2"><strong>Vantage:</strong> {{ msg.answer|safe }}</div>
+                            {% if msg.sql %}
+                                <div class="sql-box mt-2">{{ msg.sql }}</div>
+                            {% endif %}
+                            {% if msg.data %}
+                                <div class="mt-2">{{ msg.data|safe }}</div>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                </div>
+
+                <div class="mt-3 input-group">
+                    <input type="text" id="question" class="form-control" placeholder="Ask a question..." 
+                           onkeypress="if(event.key==='Enter') sendQuestion()">
+                    <button class="btn btn-primary" onclick="sendQuestion()">Ask</button>
+                </div>
+
+                <div class="mt-2">
+                    <small class="text-muted">Examples: "Show me all delayed work orders", "How many content items for MAX Australia?"</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function sendQuestion() {
+            const question = document.getElementById('question').value;
+            if (!question) return;
+
+            fetch('/ask', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({question: question})
+            })
+            .then(res => res.json())
+            .then(data => {
+                // Reload page to show new chat (simple approach)
+                window.location.reload();
+            });
+        }
+
+        function loadDashboard(name) {
+            fetch(`/dashboards/${name}`)
+            .then(res => res.json())
+            .then(data => {
+                const ctx = document.getElementById('dashboardChart').getContext('2d');
+                if (window.myChart) window.myChart.destroy();
+                if (data.type === 'pie') {
+                    window.myChart = new Chart(ctx, {
+                        type: 'pie',
+                        data: {
+                            labels: data.labels,
+                            datasets: [{
+                                data: data.values,
+                                backgroundColor: ['#3b82f6', '#ef4444', '#10b981', '#f59e0b']
+                            }]
+                        },
+                        options: { plugins: { title: { display: true, text: data.title } } }
+                    });
+                } else if (data.type === 'bar') {
+                    window.myChart = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: data.labels,
+                            datasets: [{
+                                label: data.title,
+                                data: data.values,
+                                backgroundColor: '#3b82f6'
+                            }]
+                        },
+                        options: { plugins: { title: { display: true, text: data.title } } }
+                    });
+                }
+            });
+        }
+
+        // Auto-scroll chat to bottom
+        const chatBox = document.getElementById('chat-box');
+        chatBox.scrollTop = chatBox.scrollHeight;
+    </script>
+</body>
+</html>
