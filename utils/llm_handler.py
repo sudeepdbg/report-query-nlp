@@ -2,35 +2,31 @@ import requests
 import streamlit as st
 import time
 
-def call_llm(prompt: str, model: str = "google/gemma-2-9b-it:free", retries: int = 2) -> str:
+def call_llm(prompt: str, model: str = "meta-llama/llama-3-8b-instruct:free", retries: int = 2) -> str:
     """
-    Call OpenRouter's free LLM API with retry logic.
-    If the primary model is rate-limited, falls back to an alternative model.
+    Call OpenRouter's free LLM API with retry logic and fallback models.
     """
     api_key = st.secrets.get("OPENROUTER_API_KEY")
     if not api_key:
         st.error("❌ OPENROUTER_API_KEY not found in secrets. Please add it.")
         return ""
 
-    # Alternative models to try in case of rate limiting
+    # Updated list of reliable free models (as of Feb 2026)
     fallback_models = [
-        "mistralai/mistral-7b-instruct:free",
-        "nousresearch/hermes-3-llama-3.1-405b:free",
-        "google/gemma-2-9b-it:free"
+        "meta-llama/llama-3-8b-instruct:free",          # Llama 3 8B
+        "mistralai/mistral-7b-instruct:free",           # Mistral 7B
+        "google/gemma-2-2b-it:free",                    # Gemma 2 2B (faster)
+        "nousresearch/hermes-2-pro-llama-3-8b:free",    # Hermes 2 Pro
     ]
-    # Ensure the primary model is in the list
+    # Ensure primary model is included
     if model not in fallback_models:
-        fallback_models.insert(0, model)
-    else:
-        # Move primary model to front if already in list
-        fallback_models.remove(model)
         fallback_models.insert(0, model)
 
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://your-app.streamlit.app",  # Replace with your actual app URL
+        "HTTP-Referer": "https://report-query-nlp-msc.streamlit.app",  # Replace with your app URL
         "X-Title": "Foundry Vantage"
     }
 
@@ -53,13 +49,11 @@ def call_llm(prompt: str, model: str = "google/gemma-2-9b-it:free", retries: int
                     print(f"DEBUG: Success with model {current_model}")
                     return content
                 elif response.status_code == 429:
-                    # Rate limited – try next model
                     error_info = response.json()
-                    st.warning(f"Model {current_model} rate-limited. Trying next model...")
-                    print(f"DEBUG: Model {current_model} rate-limited: {error_info}")
+                    st.warning(f"Model {current_model} rate‑limited. Trying next...")
+                    print(f"DEBUG: Model {current_model} rate‑limited: {error_info}")
                     continue
                 else:
-                    # Other error – log and continue
                     st.warning(f"OpenRouter error {response.status_code} with {current_model}")
                     print(f"DEBUG: OpenRouter error: {response.text}")
                     continue
@@ -72,13 +66,13 @@ def call_llm(prompt: str, model: str = "google/gemma-2-9b-it:free", retries: int
                 print(f"DEBUG: Exception: {str(e)}")
                 continue
 
-        # After trying all models, if we still have retries left, wait and retry
+        # After all models, if still failing, wait and retry
         if attempt < retries:
-            wait_time = 2 ** attempt  # exponential backoff
+            wait_time = 2 ** attempt
             print(f"DEBUG: All models failed. Retry {attempt+1}/{retries} after {wait_time}s")
             time.sleep(wait_time)
         else:
             break
 
-    st.error("❌ All LLM models failed after retries. Please try again later.")
+    st.error("❌ All LLM models failed after retries. Falling back to rule‑based parser.")
     return ""
