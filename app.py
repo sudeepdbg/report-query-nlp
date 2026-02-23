@@ -163,10 +163,8 @@ def ask():
     if not question:
         return jsonify({'error': 'No question provided'}), 400
     
-    # Import your query parser (ensure it's still in your project)
-    from query_parser import parse_query  # adjust import as needed
-    
-    # Parse query using rule-based engine (you can later replace with LLM)
+    # Parse query using rule-based engine (no LLM)
+    from query_parser import parse_query
     sql, error = parse_query(question, region, team, dashboard)
     if error:
         return jsonify({
@@ -198,22 +196,19 @@ def ask():
     else:
         answer = f"Found **{len(df)}** results:"
         data_html = df.to_html(classes='table table-striped', index=False)
-        chart_json = auto_chart(df)  # your auto_chart function
+        chart_json = auto_chart(df)  # your chart function
     
-    # Store in session context (optional)
-    session['last_context'] = {
-        'question': question,
-        'sql': sql,
-        'result': df.to_dict(orient='records') if not df.empty else []
-    }
-    
-    return jsonify({
+    # Append to chat history (global list)
+    chat_entry = {
         'question': question,
         'answer': answer,
         'sql': sql,
         'data': data_html,
         'chart': chart_json
-    })
+    }
+    chat_history.append(chat_entry)
+    
+    return jsonify(chat_entry)
 
 @app.route('/dashboards/<name>')
 def dashboard(name):
