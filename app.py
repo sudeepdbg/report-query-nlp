@@ -160,17 +160,59 @@ def ask():
     team = data.get('team', 'leadership')
     dashboard = data.get('dashboard', 'executive')
     
-    # For simplicity, we'll use a very basic parser here (you can expand later)
-    # Since you wanted to remove DB dependency, we'll keep the rule‑based parser simple.
-    # You can integrate your existing parse_query logic, but ensure it uses the execute_sql above.
+    if not question:
+        return jsonify({'error': 'No question provided'}), 400
     
-    # Placeholder: just return a static answer for testing
+    # Import your query parser (ensure it's still in your project)
+    from query_parser import parse_query  # adjust import as needed
+    
+    # Parse query using rule-based engine (you can later replace with LLM)
+    sql, error = parse_query(question, region, team, dashboard)
+    if error:
+        return jsonify({
+            'answer': error,
+            'sql': None,
+            'data': None,
+            'chart': None
+        })
+    
+    # Execute SQL using the global in‑memory connection
+    df, exec_error = execute_sql(sql)
+    if exec_error:
+        return jsonify({
+            'answer': f"Query execution failed: {exec_error}",
+            'sql': sql,
+            'data': None,
+            'chart': None
+        })
+    
+    # Format response
+    if df.empty:
+        answer = "No results found."
+        data_html = None
+        chart_json = None
+    elif len(df) == 1 and df.shape[1] == 1:
+        answer = f"**Result:** {df.iloc[0,0]}"
+        data_html = None
+        chart_json = None
+    else:
+        answer = f"Found **{len(df)}** results:"
+        data_html = df.to_html(classes='table table-striped', index=False)
+        chart_json = auto_chart(df)  # your auto_chart function
+    
+    # Store in session context (optional)
+    session['last_context'] = {
+        'question': question,
+        'sql': sql,
+        'result': df.to_dict(orient='records') if not df.empty else []
+    }
+    
     return jsonify({
         'question': question,
-        'answer': f"This is a mock answer for '{question}'",
-        'sql': None,
-        'data': None,
-        'chart': None
+        'answer': answer,
+        'sql': sql,
+        'data': data_html,
+        'chart': chart_json
     })
 
 @app.route('/dashboards/<name>')
