@@ -18,7 +18,7 @@ app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key")
 # ------------------------------------------------------------------
 def get_db_connection():
     conn = sqlite3.connect(':memory:', check_same_thread=False)
-    conn.row_factory = sqlite3.Row  # optional
+    conn.row_factory = sqlite3.Row
     return conn
 
 def init_database():
@@ -132,7 +132,6 @@ def init_database():
     logger.info("✅ In‑memory database initialized with sample data.")
     return conn
 
-# Initialize the in‑memory database and store the connection globally
 DB_CONN = init_database()
 
 def execute_sql(sql):
@@ -143,6 +142,13 @@ def execute_sql(sql):
     except Exception as e:
         return None, str(e)
 
+def auto_chart(df):
+    """Placeholder for chart generation – returns None for now."""
+    return None
+
+# Global chat history (in‑memory, lost on restart)
+chat_history = []
+
 # ------------------------------------------------------------------
 # Routes
 # ------------------------------------------------------------------
@@ -150,7 +156,7 @@ def execute_sql(sql):
 def index():
     region = request.args.get('region', 'NA')
     team = request.args.get('team', 'leadership')
-    return render_template('index.html', chat_history=[], current_region=region, current_team=team)
+    return render_template('index.html', chat_history=chat_history, current_region=region, current_team=team)
 
 @app.route('/ask', methods=['POST'])
 def ask():
@@ -163,26 +169,21 @@ def ask():
     if not question:
         return jsonify({'error': 'No question provided'}), 400
     
-    # Parse query using rule-based engine (no LLM)
-    from query_parser import parse_query
-    sql, error = parse_query(question, region, team, dashboard)
-    if error:
-        return jsonify({
-            'answer': error,
-            'sql': None,
-            'data': None,
-            'chart': None
-        })
+    try:
+        from query_parser import parse_query
+    except ImportError as e:
+        logger.error(f"Import error: {e}")
+        return jsonify({'answer': "Server configuration error: missing parser module", 'sql': None, 'data': None, 'chart': None})
     
-    # Execute SQL using the global in‑memory connection
+    sql, error = parse_query(question, region, team, dashboard)
+    logger.info(f"Parser returned: sql={sql}, error={error}")
+    
+    if error:
+        return jsonify({'answer': error, 'sql': None, 'data': None, 'chart': None})
+    
     df, exec_error = execute_sql(sql)
     if exec_error:
-        return jsonify({
-            'answer': f"Query execution failed: {exec_error}",
-            'sql': sql,
-            'data': None,
-            'chart': None
-        })
+        return jsonify({'answer': f"Query execution failed: {exec_error}", 'sql': sql, 'data': None, 'chart': None})
     
     # Format response
     if df.empty:
@@ -196,9 +197,8 @@ def ask():
     else:
         answer = f"Found **{len(df)}** results:"
         data_html = df.to_html(classes='table table-striped', index=False)
-        chart_json = auto_chart(df)  # your chart function
+        chart_json = auto_chart(df)
     
-    # Append to chat history (global list)
     chat_entry = {
         'question': question,
         'answer': answer,
