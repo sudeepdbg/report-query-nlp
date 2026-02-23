@@ -1,7 +1,6 @@
 import re
 import streamlit as st
 from utils.llm_handler import call_llm
-from utils.schema_index import retrieve_relevant_schema  # optional – you can still use it
 
 def parse_query(question, region='NA', team='leadership', dashboard='executive'):
     """
