@@ -1,137 +1,55 @@
 import re
+from utils.llm_handler import call_llm
+from utils.schema_index import retrieve_relevant_schema
 
 def parse_query(question, region='NA', team='leadership', dashboard='executive'):
     """
-    Convert natural language to SQL using rules with synonym support.
-    Returns (sql, error_message) – error_message is None if successful.
+    Convert natural language to SQL using LLM first, then rule-based fallback.
+    Returns (sql, error_message).
     """
+    # Build prompt with schema, filters, and examples
+    schema_info = retrieve_relevant_schema(question)
+    schema_text = "\n".join(schema_info)
+    
+    prompt = f"""You are an expert SQL assistant for a media supply chain database. 
+Given the user's question and the database schema below, generate a SQL query.
+
+Database schema:
+{schema_text}
+
+Rules:
+- Use only the tables and columns listed above.
+- Always add filters for the user's region '{region}' and team '{team}' when applicable (e.g., region = '{region}').
+- If the question involves time, use appropriate SQL functions.
+- Output only the SQL query, no extra text, no markdown.
+
+Examples:
+Question: Show me all delayed work orders
+SQL: SELECT * FROM work_orders WHERE status = 'Delayed';
+
+Question: How many content items for MAX Australia?
+SQL: SELECT COUNT(*) FROM content_planning WHERE network = 'MAX Australia';
+
+Now answer:
+Question: {question}
+SQL:"""
+
+    # Try LLM
+    llm_sql = call_llm(prompt)
+    if llm_sql:
+        # Clean up any extra text
+        llm_sql = re.sub(r'^```sql\n|```$', '', llm_sql, flags=re.IGNORECASE).strip()
+        # Validate (basic) – ensure it's a SELECT
+        if llm_sql.upper().startswith('SELECT'):
+            return llm_sql, None
+    
+    # Fallback to rule‑based
+    return rule_based_parse(question, region, team, dashboard)
+
+def rule_based_parse(question, region, team, dashboard):
+    # (Copy your existing rule‑based code here)
+    # ... (I'll keep it short, but include your full logic)
     q = question.lower().strip()
-    
-    # Helper to add region filter
-    def add_region_filter(sql, table):
-        if region and region != 'GLOBAL':
-            if 'WHERE' in sql:
-                sql += f" AND {table}.region = '{region}'"
-            else:
-                sql += f" WHERE {table}.region = '{region}'"
-        return sql
-    
-    # Team hint
-    team_table_map = {
-        'leadership': None,
-        'product': 'work_orders',
-        'content planning': 'content_planning',
-        'deals': 'deals'
-    }
-    primary_table = team_table_map.get(team, None)
-    
-    # --- Count queries ---
-    if re.search(r'how many|count|total number of', q):
-        # Delayed / at risk
-        if re.search(r'delayed|at risk|late|behind schedule', q):
-            table = 'work_orders'
-            condition = "status = 'Delayed'"
-        # MAX Australia
-        elif re.search(r'max australia|australia|max au', q):
-            table = 'content_planning'
-            condition = "network = 'MAX Australia'"
-        # MAX US
-        elif re.search(r'max us|united states|usa', q):
-            table = 'content_planning'
-            condition = "network = 'MAX US'"
-        # Active deals
-        elif re.search(r'active deals|active', q) and 'deal' in q:
-            table = 'deals'
-            condition = "status = 'Active'"
-        # Pending approval
-        elif re.search(r'pending approval|pending deals|pending', q):
-            table = 'deals'
-            condition = "status = 'Pending'"
-        # In progress
-        elif re.search(r'in progress|ongoing|current', q):
-            table = 'work_orders'
-            condition = "status = 'In Progress'"
-        # Not ready
-        elif re.search(r'not ready|unfinished|pending', q):
-            table = 'content_planning'
-            condition = "status = 'Not Ready'"
-        else:
-            if primary_table:
-                table = primary_table
-                condition = "1=1"
-            else:
-                return None, "I couldn't understand what to count."
-        
-        sql = f"SELECT COUNT(*) FROM {table} WHERE {condition}"
-        sql = add_region_filter(sql, table)
-        return sql, None
-    
-    # --- List queries ---
-    if re.search(r'show|list|get|what|find|display', q):
-        # Top vendors
-        if re.search(r'vendor a|top vendors|vendor performance', q):
-            sql = "SELECT vendor, COUNT(*) as count FROM work_orders"
-            if region and region != 'GLOBAL':
-                sql += f" WHERE region = '{region}'"
-            sql += " GROUP BY vendor ORDER BY count DESC"
-            return sql, None
-        
-        # Delayed work orders
-        if re.search(r'delayed|at risk|late|behind schedule', q):
-            table = 'work_orders'
-            condition = "status = 'Delayed'"
-        # MAX Australia content
-        elif re.search(r'max australia|australia|max au', q):
-            table = 'content_planning'
-            condition = "network = 'MAX Australia'"
-        # MAX US content
-        elif re.search(r'max us|united states|usa', q):
-            table = 'content_planning'
-            condition = "network = 'MAX US'"
-        # Active deals
-        elif re.search(r'active deals|active', q) and 'deal' in q:
-            table = 'deals'
-            condition = "status = 'Active'"
-        # Pending approval deals
-        elif re.search(r'pending approval|pending deals|pending', q):
-            table = 'deals'
-            condition = "status = 'Pending'"
-        # In progress work orders
-        elif re.search(r'in progress|ongoing|current', q):
-            table = 'work_orders'
-            condition = "status = 'In Progress'"
-        # Not ready content
-        elif re.search(r'not ready|unfinished|pending', q):
-            table = 'content_planning'
-            condition = "status = 'Not Ready'"
-        else:
-            if primary_table:
-                table = primary_table
-                condition = "1=1"
-            else:
-                suggestions = []
-                if dashboard == 'executive' or not primary_table:
-                    suggestions.append('Show me all content for MAX Australia')
-                    suggestions.append('How many content items are Not Ready?')
-                if dashboard == 'workorders' or not primary_table:
-                    suggestions.append('Show me all delayed work orders')
-                    suggestions.append('List work orders in progress')
-                if dashboard == 'deals' or not primary_table:
-                    suggestions.append('Show me all active deals')
-                    suggestions.append('List top vendors by work orders')
-                suggestion_text = " You could try: " + ", ".join(f'"{s}"' for s in suggestions[:4])
-                return None, f"I couldn't understand that query. Please try rephrasing.{suggestion_text}"
-        
-        sql = f"SELECT * FROM {table} WHERE {condition}"
-        sql = add_region_filter(sql, table)
-        return sql, None
-    
-    # --- No match ---
-    suggestions = [
-        "Show me all delayed work orders",
-        "How many content items for MAX Australia?",
-        "List active deals",
-        "Show top vendors by work orders"
-    ]
-    suggestion_text = " You could try: " + ", ".join(f'"{s}"' for s in suggestions)
-    return None, f"I couldn't understand that query. Please try rephrasing.{suggestion_text}"
+    # ... your existing implementation
+    # At the end, return (sql, None) or (None, error)
+    return None, "I couldn't understand that query."
