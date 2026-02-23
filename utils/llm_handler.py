@@ -1,10 +1,10 @@
 import requests
-import json
 import streamlit as st
+import json
 
-def call_openrouter_llm(prompt: str, model: str = "mistralai/mistral-small-3.1-24b-instruct:free") -> str:
+def call_llm(prompt: str, model: str = "mistralai/mistral-small-3.1-24b-instruct:free") -> str:
     """
-    Call OpenRouter's free Mistral endpoint.
+    Call OpenRouter's free LLM API to generate SQL.
     """
     api_key = st.secrets.get("OPENROUTER_API_KEY")
     if not api_key:
@@ -14,13 +14,15 @@ def call_openrouter_llm(prompt: str, model: str = "mistralai/mistral-small-3.1-2
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://your-app.streamlit.app",  # optional
+        "X-Title": "Foundry Vantage"
     }
     
     data = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.2,
+        "temperature": 0.1,
         "max_tokens": 400
     }
     
@@ -28,10 +30,10 @@ def call_openrouter_llm(prompt: str, model: str = "mistralai/mistral-small-3.1-2
         response = requests.post(url, headers=headers, json=data, timeout=30)
         if response.status_code == 200:
             result = response.json()
-            return result["choices"][0]["message"]["content"]
+            return result["choices"][0]["message"]["content"].strip()
         else:
             st.warning(f"OpenRouter API error {response.status_code}")
             return ""
     except Exception as e:
-        st.warning(f"OpenRouter call failed: {e}")
+        st.warning(f"LLM call failed: {e}")
         return ""
