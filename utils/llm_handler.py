@@ -10,9 +10,6 @@ def call_llm(prompt: str, model: str = "google/gemma-2-2b-it") -> str:
         st.error("❌ HF_TOKEN not found in secrets. Please add your Hugging Face token.")
         return ""
 
-    # Log that we have a token (but don't show it)
-    print("DEBUG: HF_TOKEN found, attempting API call...")
-
     API_URL = f"https://api-inference.huggingface.co/models/{model}"
     headers = {"Authorization": f"Bearer {hf_token}"}
 
@@ -33,22 +30,14 @@ def call_llm(prompt: str, model: str = "google/gemma-2-2b-it") -> str:
 
     try:
         response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-        print(f"DEBUG: Response status code: {response.status_code}")
-        print(f"DEBUG: Response headers: {response.headers}")
-        print(f"DEBUG: Response text: {response.text}")
-
         if response.status_code == 200:
             result = response.json()
             if isinstance(result, list):
-                generated = result[0].get("generated_text", "").strip()
-            else:
-                generated = result.get("generated_text", "").strip()
-            print(f"DEBUG: Generated text: {generated}")
-            return generated
+                return result[0].get("generated_text", "").strip()
+            return result.get("generated_text", "").strip()
         else:
             st.warning(f"Hugging Face API error {response.status_code}: {response.text}")
             return ""
     except Exception as e:
         st.warning(f"Hugging Face request failed: {e}")
-        print(f"DEBUG: Exception: {e}")
         return ""
