@@ -5,6 +5,7 @@ from utils.llm_handler import call_llm
 def parse_query(question, region='NA', team='leadership', dashboard='executive'):
     """
     Convert natural language to SQL using LLM first, then rule‑based fallback.
+    Returns (sql, error_message).
     """
     # Build prompt with schema and filters
     schema = """
@@ -112,6 +113,7 @@ def rule_based_parse(question, region='NA', team='leadership', dashboard='execut
 
     # --- List queries ---
     if re.search(r'show|list|get|what|find|display', q):
+        # Special case: top vendors
         if re.search(r'vendor a|top vendors|vendor performance', q):
             sql = "SELECT vendor, COUNT(*) as count FROM work_orders"
             if region and region != 'GLOBAL':
