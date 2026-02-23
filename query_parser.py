@@ -1,5 +1,4 @@
 import re
-import sqlite3
 
 def parse_query(question, region='NA', team='leadership', dashboard='executive'):
     """
