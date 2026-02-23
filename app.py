@@ -1,252 +1,264 @@
-import os
-import sqlite3
+import streamlit as st
 import pandas as pd
-import random
-import logging
-from flask import Flask, render_template, request, jsonify, session
 from datetime import datetime
+import plotly.express as px
+import plotly.graph_objects as go
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Import your modules
+from utils.database import init_database, execute_sql
+from utils.query_parser import parse_query
 
-app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key")
+# Page config must be first
+st.set_page_config(
+    page_title="Foundry Vantage",
+    page_icon="🎥",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# ------------------------------------------------------------------
-# Global in‑memory database connection
-# ------------------------------------------------------------------
-def get_db_connection():
-    conn = sqlite3.connect(':memory:', check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+# Initialize database (cached)
+@st.cache_resource
+def get_database_connection():
+    return init_database()
 
-def init_database():
-    """Create tables and insert enriched sample data into in‑memory DB."""
-    conn = get_db_connection()
-    c = conn.cursor()
-    
-    # Content Planning table
-    c.execute('''
-        CREATE TABLE content_planning (
-            id INTEGER PRIMARY KEY,
-            network TEXT,
-            content_title TEXT,
-            status TEXT,
-            planned_date TEXT,
-            region TEXT
-        )
-    ''')
-    
-    # Work Orders table
-    c.execute('''
-        CREATE TABLE work_orders (
-            id INTEGER PRIMARY KEY,
-            work_order TEXT,
-            offering TEXT,
-            status TEXT,
-            due_date TEXT,
-            region TEXT,
-            vendor TEXT,
-            priority TEXT
-        )
-    ''')
-    
-    # Deals table
-    c.execute('''
-        CREATE TABLE deals (
-            id INTEGER PRIMARY KEY,
-            deal_name TEXT,
-            vendor TEXT,
-            deal_value REAL,
-            deal_date TEXT,
-            region TEXT,
-            status TEXT
-        )
-    ''')
-    
-    # --- Enriched content planning data ---
-    content_titles = [
-        ("MAX US", "House of the Dragon S2", "Fulfilled", "NA"),
-        ("MAX US", "The Penguin", "Not Ready", "NA"),
-        ("MAX US", "The Last of Us S2", "Scheduled", "NA"),
-        ("MAX US", "Dune: Prophecy", "Delivered", "NA"),
-        ("MAX Europe", "The White Lotus S3", "Scheduled", "EMEA"),
-        ("MAX Europe", "Industry S3", "Fulfilled", "EMEA"),
-        ("MAX Europe", "Euphoria S3", "Not Ready", "EMEA"),
-        ("MAX Australia", "The Last Kingdom", "Delivered", "APAC"),
-        ("MAX Australia", "Dune: Prophecy", "Scheduled", "APAC"),
-        ("MAX Australia", "The Gilded Age", "Fulfilled", "APAC"),
-        ("MAX LatAm", "El Encargado", "Delivered", "LATAM"),
-        ("MAX LatAm", "Iosi, el espía arrepentido", "Scheduled", "LATAM"),
-        ("MAX Asia", "Oppenheimer", "Fulfilled", "APAC"),
-        ("MAX Asia", "Godzilla Minus One", "Not Ready", "APAC"),
-    ]
-    for i, (net, title, status, reg) in enumerate(content_titles, start=1):
-        c.execute('''
-            INSERT INTO content_planning (id, network, content_title, status, planned_date, region)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (i, net, title, status, f"2024-{i%12+1:02d}-{i%28+1:02d}", reg))
-    
-    # --- Enriched work orders ---
-    vendors = ["Vendor A", "Vendor B", "Vendor C", "Vendor D", "Vendor E"]
-    statuses = ["Delayed", "In Progress", "Completed", "Pending Review"]
-    regions = ["NA", "APAC", "EMEA", "LATAM"]
-    priorities = ["A", "B", "C"]
-    
-    for i in range(1, 21):
-        wo = f"WO-2024-{i:03d}"
-        offering = f"MAX {random.choice(regions)} - {random.choice(['Migration', 'Encoding', 'Subtitle', 'QC Review', 'Audio'])}"
-        status = random.choice(statuses)
-        due = f"2024-{i%12+1:02d}-{i%28+1:02d}"
-        region = random.choice(regions)
-        vendor = random.choice(vendors)
-        priority = random.choice(priorities)
-        c.execute('''
-            INSERT INTO work_orders (id, work_order, offering, status, due_date, region, vendor, priority)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (i, wo, offering, status, due, region, vendor, priority))
-    
-    # --- Enriched deals ---
-    deal_names = [
-        "Warner Bros 2024 Package", "BBC Studios Renewal", "Sony Pictures Deal",
-        "Paramount Animation", "Studio Ghibli Classics", "A24 Film Slate",
-        "Discovery+ Originals", "HBO Max Acquisitions", "CNN International",
-        "Cartoon Network Library", "Adult Swim Series", "TNT Sports Rights",
-        "TBS Comedy Specials", "Rooster Teeth Collection", "DC Universe Animated"
-    ]
-    vendors_deals = ["Warner Bros", "BBC", "Sony", "Paramount", "Ghibli", "A24", "Discovery", "HBO", "CNN", "Cartoon Network", "Adult Swim", "TNT Sports", "TBS", "Rooster Teeth", "DC"]
-    statuses_deal = ["Active", "Completed", "Pending"]
-    
-    for i, (name, vendor) in enumerate(zip(deal_names, vendors_deals), start=1):
-        value = round(random.uniform(500000, 5000000), 2)
-        date = f"2024-{i%12+1:02d}-{i%28+1:02d}"
-        region = random.choice(regions)
-        status = random.choice(statuses_deal)
-        c.execute('''
-            INSERT INTO deals (id, deal_name, vendor, deal_value, deal_date, region, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (i, name, vendor, value, date, region, status))
-    
-    conn.commit()
-    logger.info("✅ In‑memory database initialized with sample data.")
-    return conn
+DB_CONN = get_database_connection()
 
-DB_CONN = init_database()
+# Initialize session state
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+if 'current_region' not in st.session_state:
+    st.session_state.current_region = 'NA'
+if 'current_team' not in st.session_state:
+    st.session_state.current_team = 'leadership'
+if 'active_dashboard' not in st.session_state:
+    st.session_state.active_dashboard = 'executive'
 
-def execute_sql(sql):
-    """Execute SQL on the global in‑memory connection."""
-    try:
-        df = pd.read_sql_query(sql, DB_CONN)
-        return df, None
-    except Exception as e:
-        return None, str(e)
-
-def auto_chart(df):
-    """Placeholder for chart generation – returns None for now."""
-    return None
-
-# Global chat history (in‑memory, lost on restart)
-chat_history = []
-
-# ------------------------------------------------------------------
-# Routes
-# ------------------------------------------------------------------
-@app.route('/')
-def index():
-    region = request.args.get('region', 'NA')
-    team = request.args.get('team', 'leadership')
-    return render_template('index.html', chat_history=chat_history, current_region=region, current_team=team)
-
-@app.route('/ask', methods=['POST'])
-def ask():
-    data = request.json
-    question = data.get('question', '')
-    region = data.get('region', 'NA')
-    team = data.get('team', 'leadership')
-    dashboard = data.get('dashboard', 'executive')
-    
-    if not question:
-        return jsonify({'error': 'No question provided'}), 400
-    
-    try:
-        from query_parser import parse_query
-    except ImportError as e:
-        logger.error(f"Import error: {e}")
-        return jsonify({'answer': "Server configuration error: missing parser module", 'sql': None, 'data': None, 'chart': None})
-    
-    sql, error = parse_query(question, region, team, dashboard)
-    logger.info(f"Parser returned: sql={sql}, error={error}")
-    
-    if error:
-        return jsonify({'answer': error, 'sql': None, 'data': None, 'chart': None})
-    
-    df, exec_error = execute_sql(sql)
-    if exec_error:
-        return jsonify({'answer': f"Query execution failed: {exec_error}", 'sql': sql, 'data': None, 'chart': None})
-    
-    # Format response
-    if df.empty:
-        answer = "No results found."
-        data_html = None
-        chart_json = None
-    elif len(df) == 1 and df.shape[1] == 1:
-        answer = f"**Result:** {df.iloc[0,0]}"
-        data_html = None
-        chart_json = None
-    else:
-        answer = f"Found **{len(df)}** results:"
-        data_html = df.to_html(classes='table table-striped', index=False)
-        chart_json = auto_chart(df)
-    
-    chat_entry = {
-        'question': question,
-        'answer': answer,
-        'sql': sql,
-        'data': data_html,
-        'chart': chart_json
+# Custom CSS
+st.markdown("""
+<style>
+    .chat-message {
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin-bottom: 1rem;
     }
-    chat_history.append(chat_entry)
+    .user-message {
+        background-color: #e2e8f0;
+        color: #1e293b;
+    }
+    .assistant-message {
+        background-color: #3b82f6;
+        color: white;
+    }
+    .sql-box {
+        background-color: #1e293b;
+        color: #e2e8f0;
+        padding: 0.5rem;
+        border-radius: 0.25rem;
+        font-family: monospace;
+        margin-top: 0.5rem;
+    }
+    .suggestion-chip {
+        background: #e2e8f0;
+        padding: 0.25rem 0.75rem;
+        border-radius: 2rem;
+        cursor: pointer;
+        margin-right: 0.5rem;
+        margin-bottom: 0.5rem;
+        display: inline-block;
+    }
+    .suggestion-chip:hover {
+        background: #cbd5e1;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Dashboard data functions
+def get_dashboard_data(name):
+    if name == 'executive':
+        sql = "SELECT status, COUNT(*) as count FROM content_planning GROUP BY status"
+    elif name == 'workorders':
+        sql = "SELECT status, COUNT(*) as count FROM work_orders GROUP BY status"
+    elif name == 'deals':
+        sql = "SELECT vendor, SUM(deal_value) as total FROM deals GROUP BY vendor"
+    else:
+        return None
     
-    return jsonify(chat_entry)
+    df, error = execute_sql(sql, DB_CONN)
+    if error:
+        return None
+    
+    if name == 'executive':
+        return {'type': 'pie', 'labels': df['status'].tolist(), 'values': df['count'].tolist(), 'title': 'Content Status'}
+    elif name == 'workorders':
+        return {'type': 'bar', 'labels': df['status'].tolist(), 'values': df['count'].tolist(), 'title': 'Work Orders by Status'}
+    elif name == 'deals':
+        return {'type': 'bar', 'labels': df['vendor'].tolist(), 'values': df['total'].tolist(), 'title': 'Deals by Vendor'}
 
-@app.route('/dashboards/<name>')
-def dashboard(name):
-    try:
-        if name == 'executive':
-            sql = "SELECT status, COUNT(*) as count FROM content_planning GROUP BY status"
-        elif name == 'workorders':
-            sql = "SELECT status, COUNT(*) as count FROM work_orders GROUP BY status"
-        elif name == 'deals':
-            sql = "SELECT vendor, SUM(deal_value) as total FROM deals GROUP BY vendor"
+# Auto-chart function
+def auto_chart(df):
+    if df.shape[1] < 2:
+        return None
+    # Simple auto-chart logic
+    if len(df) <= 10:
+        fig = px.pie(df, names=df.columns[0], values=df.columns[1], title="Distribution")
+    else:
+        fig = px.bar(df, x=df.columns[0], y=df.columns[1], title="Breakdown")
+    return fig
+
+# ------------------------------------------------------------------
+# UI Layout
+# ------------------------------------------------------------------
+with st.sidebar:
+    st.title("🎥 Foundry Vantage")
+    st.caption("AI-powered data assistant")
+    st.divider()
+    
+    # Dashboard selector
+    st.subheader("📊 Sample Reports")
+    dashboard_options = {
+        "Executive Content Dashboard": "executive",
+        "Work Order Tracker": "workorders",
+        "Deals Performance Dashboard": "deals"
+    }
+    selected_dashboard = st.radio(
+        "Select dashboard",
+        options=list(dashboard_options.keys()),
+        index=0,
+        label_visibility="collapsed"
+    )
+    st.session_state.active_dashboard = dashboard_options[selected_dashboard]
+    
+    # Display current dashboard chart
+    dashboard_data = get_dashboard_data(st.session_state.active_dashboard)
+    if dashboard_data:
+        if dashboard_data['type'] == 'pie':
+            fig = px.pie(values=dashboard_data['values'], names=dashboard_data['labels'], title=dashboard_data['title'])
         else:
-            return jsonify({'error': 'Dashboard not found'}), 404
+            fig = px.bar(x=dashboard_data['labels'], y=dashboard_data['values'], title=dashboard_data['title'])
+        st.plotly_chart(fig, use_container_width=True)
+    
+    st.divider()
+    
+    # Filters
+    st.subheader("🔧 Filters")
+    st.session_state.current_region = st.selectbox(
+        "Region",
+        ["NA", "APAC", "EMEA", "LATAM"],
+        index=["NA", "APAC", "EMEA", "LATAM"].index(st.session_state.current_region)
+    )
+    st.session_state.current_team = st.selectbox(
+        "Team",
+        ["leadership", "product", "content planning", "deals"],
+        index=["leadership", "product", "content planning", "deals"].index(st.session_state.current_team)
+    )
+    
+    st.divider()
+    
+    # Suggestions
+    st.subheader("💡 Suggested queries")
+    suggestions = {
+        'executive': [
+            "Show me all content for MAX Australia",
+            "How many content items are Not Ready?",
+            "List scheduled content for MAX US"
+        ],
+        'workorders': [
+            "Show me all delayed work orders",
+            "How many work orders are In Progress?",
+            "List work orders for Vendor A"
+        ],
+        'deals': [
+            "Show me all active deals",
+            "How many deals are pending approval?",
+            "List top vendors by deal value"
+        ]
+    }
+    
+    for suggestion in suggestions[st.session_state.active_dashboard]:
+        if st.button(suggestion, key=f"sugg_{suggestion}", use_container_width=True):
+            # Will handle in main area
+            st.session_state['pending_question'] = suggestion
+            st.rerun()
+
+# ------------------------------------------------------------------
+# Main Chat Area
+# ------------------------------------------------------------------
+st.title("🔍 Ask Foundry Vantage")
+st.caption("Natural language queries for media supply chain data")
+
+# Chat history display
+chat_container = st.container()
+with chat_container:
+    for msg in st.session_state.chat_history:
+        # User message
+        st.markdown(f'<div class="chat-message user-message"><strong>You:</strong> {msg["question"]}</div>', unsafe_allow_html=True)
         
-        logger.info(f"Executing dashboard query: {sql}")
-        df, error = execute_sql(sql)
+        # Assistant message
+        assistant_html = f'<div class="chat-message assistant-message"><strong>Vantage:</strong> {msg["answer"]}'
+        if msg.get('sql'):
+            assistant_html += f'<div class="sql-box">{msg["sql"]}</div>'
+        if msg.get('data'):
+            assistant_html += f'<div class="mt-2">{msg["data"]}</div>'
+        if msg.get('chart'):
+            assistant_html += f'<div class="mt-2">{msg["chart"]}</div>'
+        assistant_html += '</div>'
+        st.markdown(assistant_html, unsafe_allow_html=True)
+
+# Question input
+question = st.chat_input("Ask a question...", key="question_input")
+
+# Handle pending suggestion
+if 'pending_question' in st.session_state:
+    question = st.session_state.pending_question
+    del st.session_state.pending_question
+
+if question:
+    # Process question
+    with st.spinner("🔍 Analyzing query..."):
+        # Parse query
+        sql, error = parse_query(
+            question, 
+            st.session_state.current_region,
+            st.session_state.current_team,
+            st.session_state.active_dashboard
+        )
+        
         if error:
-            logger.error(f"Dashboard SQL error: {error}")
-            return jsonify({'error': f'Database error: {error}'}), 500
+            answer = error
+            data_html = None
+            chart = None
+            sql_display = None
+        else:
+            # Execute SQL
+            df, exec_error = execute_sql(sql, DB_CONN)
+            if exec_error:
+                answer = f"Query execution failed: {exec_error}"
+                data_html = None
+                chart = None
+                sql_display = sql
+            else:
+                # Format response
+                if df.empty:
+                    answer = "No results found."
+                    data_html = None
+                    chart = None
+                elif len(df) == 1 and df.shape[1] == 1:
+                    answer = f"**Result:** {df.iloc[0,0]}"
+                    data_html = None
+                    chart = None
+                else:
+                    answer = f"Found **{len(df)}** results:"
+                    data_html = df.to_html(classes='table table-striped', index=False)
+                    chart = auto_chart(df)
+                sql_display = sql
         
-        if name == 'executive':
-            labels = df['status'].tolist()
-            values = df['count'].tolist()
-            return jsonify({'type': 'pie', 'labels': labels, 'values': values, 'title': 'Content Status'})
-        elif name == 'workorders':
-            labels = df['status'].tolist()
-            values = df['count'].tolist()
-            return jsonify({'type': 'bar', 'labels': labels, 'values': values, 'title': 'Work Orders by Status'})
-        elif name == 'deals':
-            labels = df['vendor'].tolist()
-            values = df['total'].tolist()
-            return jsonify({'type': 'bar', 'labels': labels, 'values': values, 'title': 'Deals by Vendor'})
-    except Exception as e:
-        logger.exception("Unhandled exception in dashboard route")
-        return jsonify({'error': 'Internal server error'}), 500
-
-@app.route('/healthz')
-def health_check():
-    return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()})
-
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+        # Add to chat history
+        st.session_state.chat_history.append({
+            'question': question,
+            'answer': answer,
+            'sql': sql_display,
+            'data': data_html,
+            'chart': chart
+        })
+    
+    st.rerun()
