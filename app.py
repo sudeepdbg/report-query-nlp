@@ -23,10 +23,7 @@ with st.sidebar:
     st.caption("Intelligence Layer for Media Supply Chain")
     st.divider()
     
-    # Global Region Filter
     st.session_state.current_region = st.selectbox("Market Region", ["NA", "APAC", "EMEA", "LATAM"])
-    
-    # Context Selection
     st.radio("Active Insight Layer", ["Executive Content", "Work Order Tracker", "Deals Performance"])
 
     st.divider()
@@ -45,42 +42,38 @@ if st.session_state.get('pending_prompt'):
     del st.session_state.pending_prompt
 
 if prompt:
-    # REGION LOGIC: Determine if we use Sidebar or Prompt intent
     active_reg = st.session_state.current_region
     for r in ["NA", "APAC", "EMEA", "LATAM"]:
         if r.lower() in prompt.lower():
             active_reg = r
     
     with st.spinner(f"Analyzing {active_reg} data..."):
-        # Parse NL to SQL
         sql, error, chart_type = parse_query(prompt, active_reg)
         
         if error:
             st.error(error)
         else:
-            # Execute SQL
             res_df, exec_err = execute_sql(sql, DB_CONN)
             
             if res_df is not None and not res_df.empty:
-                # Chart Generation Logic
                 fig = None
                 if chart_type == "pie" and 'status' in res_df.columns:
-                    fig = px.pie(res_df, names='status', title=f"Status Distribution: {active_reg}", hole=0.4)
+                    fig = px.pie(res_df, names='status', title=f"Status: {active_reg}", hole=0.4)
                 elif chart_type == "bar" and 'vendor' in res_df.columns:
                     val_col = 'deal_value' if 'deal_value' in res_df.columns else 'vendor'
                     fig = px.bar(res_df, x='vendor', y=val_col, title=f"Vendor Analysis: {active_reg}")
 
-                # Save to history
                 st.session_state.chat_history.append({
                     "question": prompt,
                     "answer": f"I found {len(res_df)} records for {active_reg}:",
                     "data": res_df,
-                    "chart": fig
+                    "chart": fig,
+                    "id": len(st.session_state.chat_history) # Unique ID for each message
                 })
             else:
                 st.warning(f"No matching records found for that specific request in {active_reg}.")
 
-# Display Chat History
+# Display Chat History with unique keys to fix DuplicateElementId error
 for i, msg in enumerate(st.session_state.chat_history):
     with st.chat_message("user"):
         st.write(msg["question"])
@@ -88,6 +81,7 @@ for i, msg in enumerate(st.session_state.chat_history):
     with st.chat_message("assistant", avatar="🎥"):
         st.write(msg["answer"])
         if msg["chart"]:
-            st.plotly_chart(msg["chart"], width='stretch')
+            # FIX: Adding a unique key based on message index prevents DuplicateElementId
+            st.plotly_chart(msg["chart"], width='stretch', key=f"chart_{i}")
         with st.expander("View Data Records"):
             st.dataframe(msg["data"], width='stretch')
