@@ -2,72 +2,53 @@ import re
 
 def parse_query(question, region):
     """
-    Translates Natural Language to SQL and identifies the best visualization.
-    Integrates with the enriched WBD-style database schema.
+    Translates natural language to targeted SQL for the Media Supply Chain.
     """
     q = question.lower()
     reg = region.upper()
     
-    # --- 1. ENTITY EXTRACTION (Looking for specific metadata) ---
-    # Check for content types
-    c_type = None
-    if "movie" in q: c_type = "Movie"
-    elif "series" in q: c_type = "Original Series"
-    elif "doc" in q: c_type = "Docuseries"
-    elif "sport" in q: c_type = "Live Sport"
+    # List of known networks for specific filtering
+    networks = ["MAX US", "MAX Europe", "MAX Australia", "MAX LatAm", "MAX Asia", "MAX Africa", "MAX India", "MAX UK"]
 
-    # Check for resolution
-    res_filter = None
-    if "4k" in q or "ultra" in q: res_filter = "4K Dolby Vision"
-    elif "hd" in q: res_filter = "HD"
-
-    # Check for status
-    status_filter = None
-    if "delayed" in q: status_filter = "Delayed"
-    elif "ready" in q or "pending" in q: status_filter = "Not Ready"
-    elif "delivered" in q: status_filter = "Delivered"
-
-    # --- 2. INTENT CLASSIFICATION & SQL GENERATION ---
-
-    # LOGIC FOR DEALS (Bar Chart)
-    if "deal" in q or "rights" in q:
+    # 1. DEALS INTENT
+    if any(word in q for word in ["deal", "rights", "value"]):
         table = "deals"
         sql = f"SELECT * FROM {table} WHERE region = '{reg}'"
-        
-        if "svod" in q: sql += " AND rights_type = 'SVOD Exclusive'"
-        if "linear" in q: sql += " AND rights_type = 'Linear Broadcast'"
-        
+        if "active" in q: sql += " AND status = 'Active'"
         return sql + ";", None, "bar"
 
-    # LOGIC FOR WORK ORDERS (Pie Chart)
-    if "work order" in q or "wo-" in q or "order" in q:
+    # 2. WORK ORDERS INTENT
+    if any(word in q for word in ["work order", "wo-", "task", "asset"]):
         table = "work_orders"
         sql = f"SELECT * FROM {table} WHERE region = '{reg}'"
-        
-        if status_filter: sql += f" AND status = '{status_filter}'"
-        if "subtitle" in q: sql += " AND asset_type = 'Subtitle File'"
-        if "dub" in q: sql += " AND asset_type = 'Dubbing Audio'"
-        
+        if "delayed" in q: sql += " AND status = 'Delayed'"
+        if "priority a" in q: sql += " AND priority LIKE 'A%'"
         return sql + ";", None, "pie"
 
-    # LOGIC FOR CONTENT PLANNING (Pie Chart)
-    if "content" in q or "program" in q or "show" in q or "max" in q:
+    # 3. CONTENT PLANNING INTENT (Executive View)
+    if any(word in q for word in ["content", "show", "status", "max", "scheduled"]):
         table = "content_planning"
+        # Start with strict regional filter to prevent data leakage
         sql = f"SELECT * FROM {table} WHERE region = '{reg}'"
         
-        if c_type: sql += f" AND content_type = '{c_type}'"
-        if res_filter: sql += f" AND resolution = '{res_filter}'"
-        if status_filter: sql += f" AND status = '{status_filter}'"
+        # Check if the user mentioned a specific Network (e.g., "MAX Australia")
+        for net in networks:
+            if net.lower() in q:
+                sql += f" AND network = '{net}'"
         
-        # Keyword-based Title Search (e.g., "Show me House of the Dragon")
-        match = re.search(r"(?:show me|about|for)\s+(['\"]?)(.*?)\1(?:$|\s+in)", q)
+        # Check for status keywords
+        if "ready" in q or "pending" in q: sql += " AND status = 'Not Ready'"
+        if "delivered" in q: sql += " AND status = 'Delivered'"
+        
+        # Title specific search
+        match = re.search(r"(?:about|for|show)\s+(.*)", q)
         if match:
-            title_query = match.group(2).strip()
-            # Basic validation to ensure the title isn't just a status word
-            if title_query not in ["content", "status", "ready"]:
-                sql += f" AND content_title LIKE '%{title_query}%'"
+            potential_title = match.group(1).strip()
+            # Exclude regions or common words from being treated as titles
+            if potential_title.upper() not in ["APAC", "EMEA", "NA", "LATAM", "STATUS"]:
+                sql += f" AND content_title LIKE '%{potential_title.title()}%'"
 
         return sql + ";", None, "pie"
 
-    # 3. "I DON'T KNOW" HANDLER (As per Guiding Principles)
-    return None, "I'm sorry, I couldn't translate that request. Could you please rephrase it or be more specific? Try asking about Content, Work Orders, or Deals.", None
+    # Fallback for unhandled queries
+    return None, "I'm sorry, I couldn't translate that request. Try asking about Content, Work Orders, or Deal values.", None
