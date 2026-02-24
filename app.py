@@ -12,34 +12,44 @@ def get_db():
 
 DB_CONN = get_db()
 
-# Initialize session states
+# 1. Initialize session states
 if 'chat_history' not in st.session_state: st.session_state.chat_history = []
 if 'current_region' not in st.session_state: st.session_state.current_region = 'APAC'
 
-# --- THE CRITICAL FIX: REGION SYNC ---
-def sync_region(new_reg):
-    """Explicitly updates the sidebar widget value to prevent state-lag."""
-    st.session_state.current_region = new_reg
-    st.session_state["sidebar_market_selector"] = new_reg
+# 2. PRE-EMPTIVE REGION DETECTION
+# We capture the input here so we can adjust state BEFORE rendering the sidebar
+temp_input = st.chat_input("Ask about deals, content, or localization...")
 
-# --- Sidebar Management ---
+# Determine the active prompt (from input or button)
+prompt = None
+if st.session_state.get('pending_prompt'):
+    prompt = st.session_state.pending_prompt
+    del st.session_state.pending_prompt
+elif temp_input:
+    prompt = temp_input
+
+# If a region is mentioned in the text, update the state immediately
+if prompt:
+    for r in ["NA", "APAC", "EMEA", "LATAM"]:
+        if r.lower() in prompt.lower():
+            st.session_state.current_region = r
+            break
+
+# 3. Sidebar Management
 with st.sidebar:
     st.title("🎥 Foundry Vantage")
     st.divider()
     
     market_options = ["NA", "APAC", "EMEA", "LATAM"]
-    # We bind the selectbox directly to the 'sidebar_market_selector' key
+    # Now this selectbox index is always in sync because state was updated at the top
     selected_market = st.selectbox(
         "Market Region", 
         market_options,
-        key="sidebar_market_selector",
-        index=market_options.index(st.session_state.current_region)
+        index=market_options.index(st.session_state.current_region),
+        key="sidebar_market_selector"
     )
-    # Update global state based on manual sidebar change
     st.session_state.current_region = selected_market
     
-    st.divider()
-    # Dynamic Suggestions Logic
     def get_suggestions(reg):
         return [f"Show SVOD rights in {reg}", f"Localization status for {reg}", f"Top vendors in {reg}", 
                 f"Duplo work orders in {reg}", f"Show readiness for MAX {reg}", f"Total deal value {reg}"]
@@ -50,30 +60,10 @@ with st.sidebar:
             st.session_state.pending_prompt = sug
             st.rerun()
 
-# --- Main Chat UI ---
+# 4. Main Chat UI
 st.title("🔍 Ask Foundry Vantage")
 
-prompt = st.chat_input("Ask about deals, content, or localization...")
-
-# Handle pending prompts from buttons
-if st.session_state.get('pending_prompt'):
-    prompt = st.session_state.pending_prompt
-    del st.session_state.pending_prompt
-
 if prompt:
-    # 1. SCAN for region in text
-    detected_reg = None
-    for r in ["NA", "APAC", "EMEA", "LATAM"]:
-        if r.lower() in prompt.lower():
-            detected_reg = r
-            break
-    
-    # 2. FORCE SYNC if a new region is mentioned
-    if detected_reg and detected_reg != st.session_state.current_region:
-        sync_region(detected_reg)
-        st.rerun() # Hard reset to ensure UI snaps to new region
-
-    # 3. EXECUTE QUERY
     active_reg = st.session_state.current_region
     with st.spinner(f"Analyzing {active_reg} infrastructure..."):
         sql, error, chart_type = parse_query(prompt, active_reg)
@@ -89,8 +79,8 @@ if prompt:
                     fig = px.pie(res_df, names=col, title=f"Distribution: {active_reg}", hole=0.4)
                 else:
                     y_axis = 'deal_value' if 'deal_value' in res_df.columns else res_df.columns[0]
-                    fig = px.bar(res_df, x=res_df.columns[1] if len(res_df.columns)>1 else res_df.columns[0], 
-                                 y=y_axis, title=f"Analysis: {active_reg}")
+                    x_axis = res_df.columns[1] if len(res_df.columns) > 1 else res_df.columns[0]
+                    fig = px.bar(res_df, x=x_axis, y=y_axis, title=f"Analysis: {active_reg}")
 
                 st.session_state.chat_history.append({
                     "question": prompt, 
@@ -101,10 +91,12 @@ if prompt:
             else:
                 st.warning(f"No records found for '{prompt}' in {active_reg}.")
 
-# --- Display History ---
+# 5. Display History
 for i, msg in enumerate(st.session_state.chat_history):
     with st.chat_message("user"): st.write(msg["question"])
     with st.chat_message("assistant", avatar="🎥"):
         st.write(msg["answer"])
-        if msg["chart"]: st.plotly_chart(msg["chart"], width='stretch', key=f"c_{i}")
-        with st.expander("View Data"): st.dataframe(msg["data"], width='stretch', key=f"d_{i}")
+        if msg["chart"]: 
+            st.plotly_chart(msg["chart"], width='stretch', key=f"c_{i}")
+        with st.expander("View Data"): 
+            st.dataframe(msg["data"], width='stretch', key=f"d_{i}")
