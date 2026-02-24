@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
 import plotly.express as px
 from utils.database import init_database, execute_sql
 from utils.query_parser import parse_query
@@ -40,19 +39,20 @@ if 'active_dashboard' not in st.session_state: st.session_state.active_dashboard
 # --- Sidebar ---
 with st.sidebar:
     st.title("🎥 Foundry Vantage")
+    st.caption("Intelligence Layer for Media Supply Chain")
     st.divider()
+    
     st.session_state.current_region = st.selectbox("Market Region", ["NA", "APAC", "EMEA", "LATAM"])
     
     dash_options = {"Executive Content": "executive", "Work Order Tracker": "workorders", "Deals Performance": "deals"}
     selected_dash = st.radio("Active Insight Layer", list(dash_options.keys()))
     st.session_state.active_dashboard = dash_options[selected_dash]
 
-    # DYNAMIC SUGGESTIONS
-    st.subheader("💡 Suggested for you")
-    current_suggestions = SUGGESTIONS.get(st.session_state.active_dashboard, {}).get(st.session_state.current_region, ["Show me total count"])
+    st.subheader("💡 Suggested Queries")
+    current_suggestions = SUGGESTIONS.get(st.session_state.active_dashboard, {}).get(st.session_state.current_region, ["Show total count"])
     
     for sugg in current_suggestions:
-        if st.button(sugg, use_container_width=True):
+        if st.button(sugg, width='stretch'):
             st.session_state.pending_prompt = sugg
             st.rerun()
 
@@ -66,35 +66,67 @@ for i, msg in enumerate(st.session_state.chat_history):
     
     with st.chat_message("assistant", avatar="🎥"):
         st.write(msg["answer"])
-        if msg.get("data") is not None:
-            st.dataframe(msg["data"], use_container_width=True)
         
-        # FEEDBACK MECHANISM
-        col1, col2, col3 = st.columns([1, 1, 10])
+        # Render Graph if available
+        if msg.get("chart") is not None:
+            st.plotly_chart(msg["chart"], width='stretch')
+            
+        # Render Table
+        if msg.get("data") is not None:
+            with st.expander("View Detailed Records"):
+                st.dataframe(msg["data"], width='stretch')
+        
+        # Feedback mechanism
+        col1, col2, _ = st.columns([1, 1, 10])
         with col1:
-            if st.button("👍", key=f"up_{i}"): st.toast("Thanks for the feedback!")
+            if st.button("👍", key=f"up_{i}"): st.toast("Feedback recorded!")
         with col2:
-            if st.button("👎", key=f"down_{i}"): st.toast("Feedback recorded for improvement.")
+            if st.button("👎", key=f"down_{i}"): st.toast("Feedback recorded!")
 
 # Handle Input
-if prompt := st.chat_input("Ask a question...") or st.session_state.get('pending_prompt'):
-    if st.session_state.get('pending_prompt'):
-        prompt = st.session_state.pending_prompt
-        del st.session_state.pending_prompt
+prompt = st.chat_input("Ask a question...")
+if st.session_state.get('pending_prompt'):
+    prompt = st.session_state.pending_prompt
+    del st.session_state.pending_prompt
 
-    with st.spinner("Analyzing..."):
-        sql, error = parse_query(prompt, st.session_state.current_region)
+if prompt:
+    with st.spinner("Querying Database..."):
+        # The parser now returns the chart type required
+        sql, error, chart_type = parse_query(prompt, st.session_state.current_region)
         
         if error:
-            ans, res_df = f"⚠️ {error}", None
+            ans, res_df, fig = f"⚠️ {error}", None, None
         else:
             res_df, exec_err = execute_sql(sql, DB_CONN)
             if exec_err:
-                ans, res_df = f"Query error: {exec_err}", None
+                ans, res_df, fig = f"Query error: {exec_err}", None, None
             elif res_df.empty:
-                ans, res_df = "No results found for that specific filter.", None
+                ans, res_df, fig = "No results found for this filter.", None, None
             else:
-                ans = f"I found {len(res_df)} results:"
+                ans = f"I found {len(res_df)} results in {st.session_state.current_region}:"
+                
+                # --- AUTOMATIC CHART GENERATION ---
+                fig = None
+                try:
+                    if chart_type == "pie" and "status" in res_df.columns:
+                        counts = res_df['status'].value_counts().reset_index()
+                        counts.columns = ['Status', 'Count']
+                        fig = px.pie(counts, names='Status', values='Count', hole=0.4, title="Status Breakdown")
+                    
+                    elif chart_type == "bar" and "vendor" in res_df.columns:
+                        # Use deal_value for Deals, or simple count for Work Orders
+                        val_col = 'deal_value' if 'deal_value' in res_df.columns else 'vendor'
+                        chart_data = res_df.groupby('vendor')[val_col].count() if val_col == 'vendor' else res_df.groupby('vendor')[val_col].sum()
+                        chart_data = chart_data.nlargest(5).reset_index()
+                        chart_data.columns = ['Vendor', 'Metric']
+                        fig = px.bar(chart_data, x='Vendor', y='Metric', title="Top Vendors Performance")
+                except Exception as e:
+                    print(f"Chart Error: {e}")
 
-        st.session_state.chat_history.append({"question": prompt, "answer": ans, "data": res_df})
+        st.session_state.chat_history.append({
+            "question": prompt, 
+            "answer": ans, 
+            "data": res_df, 
+            "chart": fig
+        })
         st.rerun()
