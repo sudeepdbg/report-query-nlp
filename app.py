@@ -15,23 +15,43 @@ DB_CONN = get_db()
 if 'chat_history' not in st.session_state: st.session_state.chat_history = []
 if 'current_region' not in st.session_state: st.session_state.current_region = 'APAC'
 
-# --- Logic for 5-6 Dynamic Suggestions ---
-def get_expanded_suggestions(region):
-    # This list changes based on the region and variety in your DB
+# --- Enhanced Dynamic Suggestions for 6 Scenarios ---
+def get_expanded_suggestions(last_query, region):
+    q = last_query.lower()
+    # Context: Localization & Duplo
+    if any(word in q for word in ["local", "order", "task", "duplo"]):
+        return [
+            f"Show Duplo queue status for {region}",
+            f"Which localization tasks are delayed in {region}?",
+            f"List all Dubbing work orders for {region}",
+            f"Subtitle vs Dubbing volume in {region}",
+            f"Show high priority tasks for {region}",
+            f"What is the Packaging status for {region}?"
+        ]
+    # Context: Deals & Rights
+    elif any(word in q for word in ["deal", "rights", "value"]):
+        return [
+            f"Show SVOD Exclusive rights in {region}",
+            f"Top vendors by deal value in {region}",
+            f"List active negotiations in {region}",
+            f"Show rights scope breakdown for {region}",
+            f"Total budget for {region} market",
+            f"Check pending acquisitions in {region}"
+        ]
+    # Default Context: Content Readiness
     return [
-        f"Show active deals in {region}",
-        f"Top 5 vendors by value in {region}",
-        f"What content is 'Not Ready' in {region}?",
-        f"List delayed work orders for {region}",
-        f"Show status for MAX Australia" if region == "APAC" else f"Show status for MAX Europe",
-        f"Total deal value for {region} market"
+        f"Which content is 'Not Ready' in {region}?",
+        f"Show localization status for {region}",
+        f"List all 'Acquired' content in {region}",
+        f"Content delivery schedule for {region}",
+        f"Available languages in {region} market",
+        f"Show readiness for MAX {region}"
     ]
 
 # --- Sidebar ---
 with st.sidebar:
     st.title("🎥 Foundry Vantage")
     
-    # Strictly bind the selector to session state
     market_options = ["NA", "APAC", "EMEA", "LATAM"]
     st.session_state.current_region = st.selectbox(
         "Market Region", 
@@ -42,28 +62,30 @@ with st.sidebar:
     st.divider()
     st.subheader("💡 Suggested Queries")
     
-    # Generate 6 dynamic buttons
-    suggestions = get_expanded_suggestions(st.session_state.current_region)
+    # Get last query for context-aware suggestions
+    last_q = st.session_state.chat_history[-1]["question"] if st.session_state.chat_history else ""
+    suggestions = get_expanded_suggestions(last_q, st.session_state.current_region)
+    
     for sug in suggestions:
-        if st.button(sug, width='stretch'): # Fix: use width='stretch' per logs [cite: 47]
+        # Fixed width='stretch' per deployment logs 
+        if st.button(sug, width='stretch'): 
             st.session_state.pending_prompt = sug
             st.rerun()
 
 # --- Main Chat ---
 st.title("🔍 Ask Foundry Vantage")
 
-prompt = st.chat_input("Ask about deals, content, or work orders...")
+prompt = st.chat_input("Ask about Rights, Localization, or Duplo status...")
 if st.session_state.get('pending_prompt'):
     prompt = st.session_state.pending_prompt
     del st.session_state.pending_prompt
 
 if prompt:
-    # FILTER FIX: Sync session state if a region is typed
     active_reg = st.session_state.current_region
     for r in ["NA", "APAC", "EMEA", "LATAM"]:
         if r.lower() in prompt.lower():
             active_reg = r
-            st.session_state.current_region = r # Sync sidebar to text
+            st.session_state.current_region = r 
     
     with st.spinner(f"Analyzing {active_reg}..."):
         sql, error, chart_type = parse_query(prompt, active_reg)
@@ -74,12 +96,13 @@ if prompt:
             res_df, exec_err = execute_sql(sql, DB_CONN)
             if res_df is not None and not res_df.empty:
                 fig = None
-                # PIE: for Status/Categories | BAR: for Values/Comparisons
                 if chart_type == "pie":
-                    fig = px.pie(res_df, names='status', title=f"Status Breakdown: {active_reg}", hole=0.4)
+                    # Dynamic column selection for pie charts based on new schema
+                    col = 'status' if 'status' in res_df.columns else res_df.columns[-1]
+                    fig = px.pie(res_df, names=col, title=f"Distribution: {active_reg}", hole=0.4)
                 elif chart_type == "bar":
                     y_val = 'deal_value' if 'deal_value' in res_df.columns else res_df.columns[0]
-                    fig = px.bar(res_df, x='vendor', y=y_val, title=f"Value Analysis: {active_reg}")
+                    fig = px.bar(res_df, x=res_df.columns[1], y=y_val, title=f"Value Analysis: {active_reg}")
 
                 st.session_state.chat_history.append({
                     "question": prompt,
@@ -90,12 +113,14 @@ if prompt:
             else:
                 st.warning(f"No records found for '{prompt}' in {active_reg}.")
 
-# Display History with Unique Keys to fix DuplicateElementId 
+# Display History
 for i, msg in enumerate(st.session_state.chat_history):
     with st.chat_message("user"): st.write(msg["question"])
     with st.chat_message("assistant", avatar="🎥"):
         st.write(msg["answer"])
         if msg["chart"]: 
+            # Fixed width='stretch' per deployment logs 
             st.plotly_chart(msg["chart"], width='stretch', key=f"chart_{i}")
         with st.expander("View Records"):
+            # Fixed width='stretch' per deployment logs 
             st.dataframe(msg["data"], width='stretch', key=f"df_{i}")
