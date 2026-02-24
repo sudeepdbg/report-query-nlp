@@ -14,7 +14,7 @@ def parse_query(question, region):
     # 1. RIGHTS & DEALS
     if any(word in q for word in ["deal", "rights", "value", "cost", "negotiat", "scope"]):
         if "svod" in q:
-            # Added 'region' to the SELECT for visual confirmation
+            # We explicitly pull region and network to prove the filter is working
             sql = f"SELECT content_title, network, rights_type, status, region FROM content_planning WHERE region = '{reg}'"
             if reg in network_map:
                 nets = "', '".join(network_map[reg])
@@ -52,20 +52,10 @@ def parse_query(question, region):
             nets = "', '".join(network_map[reg])
             sql += f" AND network IN ('{nets}')"
         
-        if "acquired" in q: sql += " AND acquisition_status = 'Acquired'"
-        if "pending" in q: sql += " AND acquisition_status = 'Pending Materials'"
-        if "localization" in q:
-            if "complete" in q: sql += " AND localization_status = 'Completed'"
-            else: sql += " AND localization_status != 'Completed'"
         if "ready" in q or "delivered" in q:
             sql += " AND status IN ('Delivered', 'Scheduled', 'Fulfilled')"
-
-        match = re.search(r"(?:for|about|show)\s+(.*)", q)
-        if match:
-            potential_title = match.group(1).strip().title()
-            if potential_title.upper() not in ["APAC", "EMEA", "NA", "LATAM", "STATUS"]:
-                sql += f" AND content_title LIKE '%{potential_title}%'"
-            
+        if "acquired" in q: sql += " AND acquisition_status = 'Acquired'"
+        
         return sql + ";", None, "pie"
 
-    return None, "Intent not clear. Please ask about 'Rights', 'Localization Status', 'Acquisition Readiness', or 'Duplo Status'.", None
+    return None, "Intent not clear. Try: 'Show SVOD ready content in LATAM'.", None
