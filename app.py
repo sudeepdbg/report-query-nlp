@@ -4,11 +4,11 @@ from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
 
-# Import your modules
+# Import specialized modules
 from utils.database import init_database, execute_sql
 from utils.query_parser import parse_query
 
-# Page config must be first
+# 1. Page Configuration
 st.set_page_config(
     page_title="Foundry Vantage",
     page_icon="🎥",
@@ -16,14 +16,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize database (cached)
+# 2. Database Connection (Cached)
 @st.cache_resource
 def get_database_connection():
     return init_database()
 
 DB_CONN = get_database_connection()
 
-# Initialize session state
+# 3. Session State Management
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 if 'current_region' not in st.session_state:
@@ -33,232 +33,147 @@ if 'current_team' not in st.session_state:
 if 'active_dashboard' not in st.session_state:
     st.session_state.active_dashboard = 'executive'
 
-# Custom CSS
+# 4. Expert UI Styling
 st.markdown("""
 <style>
-    .chat-message {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin-bottom: 1rem;
+    .stChatMessage { border-radius: 10px; margin-bottom: 10px; }
+    .sql-code-block {
+        background-color: #f0f2f6;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 5px solid #3b82f6;
+        font-family: 'Source Code Pro', monospace;
+        font-size: 0.85rem;
     }
-    .user-message {
-        background-color: #e2e8f0;
-        color: #1e293b;
-    }
-    .assistant-message {
-        background-color: #3b82f6;
-        color: white;
-    }
-    .sql-box {
-        background-color: #1e293b;
-        color: #e2e8f0;
-        padding: 0.5rem;
-        border-radius: 0.25rem;
-        font-family: monospace;
-        margin-top: 0.5rem;
-    }
-    .suggestion-chip {
-        background: #e2e8f0;
-        padding: 0.25rem 0.75rem;
-        border-radius: 2rem;
-        cursor: pointer;
-        margin-right: 0.5rem;
-        margin-bottom: 0.5rem;
-        display: inline-block;
-    }
-    .suggestion-chip:hover {
-        background: #cbd5e1;
-    }
+    .data-table-container { margin-top: 15px; border: 1px solid #e6e9ef; border-radius: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
-# Dashboard data functions
+# 5. Helper Functions
 def get_dashboard_data(name):
-    if name == 'executive':
-        sql = "SELECT status, COUNT(*) as count FROM content_planning GROUP BY status"
-    elif name == 'workorders':
-        sql = "SELECT status, COUNT(*) as count FROM work_orders GROUP BY status"
-    elif name == 'deals':
-        sql = "SELECT vendor, SUM(deal_value) as total FROM deals GROUP BY vendor"
-    else:
-        return None
+    """Fetches high-level metrics for the sidebar overview."""
+    queries = {
+        'executive': "SELECT status, COUNT(*) as count FROM content_planning GROUP BY status",
+        'workorders': "SELECT status, COUNT(*) as count FROM work_orders GROUP BY status",
+        'deals': "SELECT vendor, SUM(deal_value) as total FROM deals GROUP BY vendor"
+    }
+    
+    sql = queries.get(name)
+    if not sql: return None
     
     df, error = execute_sql(sql, DB_CONN)
-    if error:
-        return None
+    if error or df.empty: return None
     
-    if name == 'executive':
-        return {'type': 'pie', 'labels': df['status'].tolist(), 'values': df['count'].tolist(), 'title': 'Content Status'}
-    elif name == 'workorders':
-        return {'type': 'bar', 'labels': df['status'].tolist(), 'values': df['count'].tolist(), 'title': 'Work Orders by Status'}
-    elif name == 'deals':
-        return {'type': 'bar', 'labels': df['vendor'].tolist(), 'values': df['total'].tolist(), 'title': 'Deals by Vendor'}
+    return df
 
-# Auto-chart function
 def auto_chart(df):
-    if df.shape[1] < 2:
-        return None
-    # Simple auto-chart logic
-    if len(df) <= 10:
-        fig = px.pie(df, names=df.columns[0], values=df.columns[1], title="Distribution")
+    """Smart charting logic based on data shape and content."""
+    if df.shape[1] < 2: return None
+    
+    # Identify columns
+    cat_col = df.columns[0]
+    num_col = df.columns[1]
+    
+    # Use Pie for distributions under 6 items, Bar for others
+    if len(df) <= 6:
+        return px.pie(df, names=cat_col, values=num_col, title=f"{cat_col} Distribution", hole=0.4)
     else:
-        fig = px.bar(df, x=df.columns[0], y=df.columns[1], title="Breakdown")
-    return fig
+        return px.bar(df, x=cat_col, y=num_col, title=f"{cat_col} Breakdown", color=num_col)
 
 # ------------------------------------------------------------------
-# UI Layout
+# SIDEBAR: Context & Navigation
 # ------------------------------------------------------------------
 with st.sidebar:
     st.title("🎥 Foundry Vantage")
-    st.caption("AI-powered data assistant")
+    st.caption("Intelligent Media Supply Chain Assistant")
     st.divider()
     
-    # Dashboard selector
-    st.subheader("📊 Sample Reports")
-    dashboard_options = {
-        "Executive Content Dashboard": "executive",
+    # Context Settings
+    st.subheader("⚙️ User Context")
+    st.session_state.current_region = st.selectbox("Market Region", ["NA", "APAC", "EMEA", "LATAM"])
+    st.session_state.current_team = st.selectbox("Functional Team", ["leadership", "product", "content planning", "deals"])
+    
+    st.divider()
+    
+    # Dashboard Discovery
+    st.subheader("📊 Active Insight Layer")
+    dashboards = {
+        "Executive Content": "executive",
         "Work Order Tracker": "workorders",
-        "Deals Performance Dashboard": "deals"
+        "Deals Performance": "deals"
     }
-    selected_dashboard = st.radio(
-        "Select dashboard",
-        options=list(dashboard_options.keys()),
-        index=0,
-        label_visibility="collapsed"
-    )
-    st.session_state.active_dashboard = dashboard_options[selected_dashboard]
+    selected_name = st.radio("Switch Dashboard Context", options=list(dashboards.keys()))
+    st.session_state.active_dashboard = dashboards[selected_name]
     
-    # Display current dashboard chart
-    dashboard_data = get_dashboard_data(st.session_state.active_dashboard)
-    if dashboard_data:
-        if dashboard_data['type'] == 'pie':
-            fig = px.pie(values=dashboard_data['values'], names=dashboard_data['labels'], title=dashboard_data['title'])
-        else:
-            fig = px.bar(x=dashboard_data['labels'], y=dashboard_data['values'], title=dashboard_data['title'])
-        st.plotly_chart(fig, use_container_width=True)
-    
-    st.divider()
-    
-    # Filters
-    st.subheader("🔧 Filters")
-    st.session_state.current_region = st.selectbox(
-        "Region",
-        ["NA", "APAC", "EMEA", "LATAM"],
-        index=["NA", "APAC", "EMEA", "LATAM"].index(st.session_state.current_region)
-    )
-    st.session_state.current_team = st.selectbox(
-        "Team",
-        ["leadership", "product", "content planning", "deals"],
-        index=["leadership", "product", "content planning", "deals"].index(st.session_state.current_team)
-    )
-    
-    st.divider()
-    
-    # Suggestions
-    st.subheader("💡 Suggested queries")
-    suggestions = {
-        'executive': [
-            "Show me all content for MAX Australia",
-            "How many content items are Not Ready?",
-            "List scheduled content for MAX US"
-        ],
-        'workorders': [
-            "Show me all delayed work orders",
-            "How many work orders are In Progress?",
-            "List work orders for Vendor A"
-        ],
-        'deals': [
-            "Show me all active deals",
-            "How many deals are pending approval?",
-            "List top vendors by deal value"
-        ]
-    }
-    
-    for suggestion in suggestions[st.session_state.active_dashboard]:
-        if st.button(suggestion, key=f"sugg_{suggestion}", use_container_width=True):
-            # Will handle in main area
-            st.session_state['pending_question'] = suggestion
-            st.rerun()
+    # Render Sidebar Mini-Chart
+    df_mini = get_dashboard_data(st.session_state.active_dashboard)
+    if df_mini is not None:
+        fig_mini = auto_chart(df_mini)
+        st.plotly_chart(fig_mini, use_container_width=True, config={'displayModeBar': False})
 
 # ------------------------------------------------------------------
-# Main Chat Area
+# MAIN AREA: Conversational Interface
 # ------------------------------------------------------------------
 st.title("🔍 Ask Foundry Vantage")
-st.caption("Natural language queries for media supply chain data")
+st.info(f"Currently filtering for **{st.session_state.current_region}** market via the **{st.session_state.current_team}** lens.")
 
-# Chat history display
-chat_container = st.container()
-with chat_container:
-    for msg in st.session_state.chat_history:
-        # User message
-        st.markdown(f'<div class="chat-message user-message"><strong>You:</strong> {msg["question"]}</div>', unsafe_allow_html=True)
-        
-        # Assistant message
-        assistant_html = f'<div class="chat-message assistant-message"><strong>Vantage:</strong> {msg["answer"]}'
+# Display Chat History using Native Components
+for msg in st.session_state.chat_history:
+    with st.chat_message("user"):
+        st.write(msg["question"])
+    
+    with st.chat_message("assistant", avatar="🎥"):
+        st.write(msg["answer"])
         if msg.get('sql'):
-            assistant_html += f'<div class="sql-box">{msg["sql"]}</div>'
-        if msg.get('data'):
-            assistant_html += f'<div class="mt-2">{msg["data"]}</div>'
+            with st.expander("View Generated Logic"):
+                st.code(msg['sql'], language="sql")
+        if msg.get('data') is not None:
+            st.dataframe(msg['data'], use_container_width=True)
         if msg.get('chart'):
-            assistant_html += f'<div class="mt-2">{msg["chart"]}</div>'
-        assistant_html += '</div>'
-        st.markdown(assistant_html, unsafe_allow_html=True)
+            st.plotly_chart(msg['chart'], use_container_width=True)
 
-# Question input
-question = st.chat_input("Ask a question...", key="question_input")
-
-# Handle pending suggestion
-if 'pending_question' in st.session_state:
-    question = st.session_state.pending_question
-    del st.session_state.pending_question
-
-if question:
-    # Process question
-    with st.spinner("🔍 Analyzing query..."):
-        # Parse query
+# Chat Input
+if prompt := st.chat_input("How many work orders are delayed in APAC?"):
+    # 1. Update UI immediately
+    st.session_state.chat_history.append({"question": prompt, "answer": "Processing..."})
+    
+    # 2. Logic Execution
+    with st.spinner("Translating natural language to data query..."):
         sql, error = parse_query(
-            question, 
+            prompt, 
             st.session_state.current_region,
             st.session_state.current_team,
             st.session_state.active_dashboard
         )
         
         if error:
-            answer = error
-            data_html = None
-            chart = None
-            sql_display = None
+            final_answer = f"⚠️ {error}"
+            res_df, res_chart, res_sql = None, None, None
         else:
-            # Execute SQL
-            df, exec_error = execute_sql(sql, DB_CONN)
+            df_res, exec_error = execute_sql(sql, DB_CONN)
             if exec_error:
-                answer = f"Query execution failed: {exec_error}"
-                data_html = None
-                chart = None
-                sql_display = sql
+                final_answer = f"I encountered a technical error: {exec_error}"
+                res_df, res_chart, res_sql = None, None, sql
+            elif df_res.empty:
+                final_answer = "I couldn't find any data matching those specific criteria."
+                res_df, res_chart, res_sql = None, None, sql
             else:
-                # Format response
-                if df.empty:
-                    answer = "No results found."
-                    data_html = None
-                    chart = None
-                elif len(df) == 1 and df.shape[1] == 1:
-                    answer = f"**Result:** {df.iloc[0,0]}"
-                    data_html = None
-                    chart = None
+                # Deterministic Answer Generation
+                if len(df_res) == 1 and df_res.shape[1] == 1:
+                    final_answer = f"The answer is **{df_res.iloc[0,0]}**."
+                    res_df, res_chart = None, None
                 else:
-                    answer = f"Found **{len(df)}** results:"
-                    data_html = df.to_html(classes='table table-striped', index=False)
-                    chart = auto_chart(df)
-                sql_display = sql
-        
-        # Add to chat history
-        st.session_state.chat_history.append({
-            'question': question,
-            'answer': answer,
-            'sql': sql_display,
-            'data': data_html,
-            'chart': chart
-        })
-    
-    st.rerun()
+                    final_answer = f"I've retrieved **{len(df_res)}** records based on your request:"
+                    res_df = df_res
+                    res_chart = auto_chart(df_res)
+                res_sql = sql
+
+        # 3. Update History with Real Data
+        st.session_state.chat_history[-1] = {
+            'question': prompt,
+            'answer': final_answer,
+            'sql': res_sql,
+            'data': res_df,
+            'chart': res_chart
+        }
+        st.rerun()
