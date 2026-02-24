@@ -89,7 +89,6 @@ for i, msg in enumerate(st.session_state.chat_history):
             st.dataframe(msg["data"], use_container_width=True, key=f"hist_df_{i}")
 
 # 5. PROCESS NEW QUERY
-# 5. PROCESS NEW QUERY (With Added Suggestions)
 if active_prompt:
     with st.chat_message("user"):
         st.write(active_prompt)
@@ -99,24 +98,54 @@ if active_prompt:
         
         with st.spinner(f"Querying {active_reg}..."):
             sql, error, chart_type = parse_query(active_prompt, active_reg)
-            res_df, _ = execute_sql(sql, DB_CONN)
             
-            if res_df is not None and not res_df.empty:
-                # ... [Keep your existing successful rendering logic here] ...
-                st.rerun()
+            if error:
+                st.error(error)
             else:
-                # --- NEW SUGGESTION LOGIC ---
-                st.warning(f"No records found for '{active_prompt}' in {active_reg}.")
-                st.write("### 💡 Try these instead:")
+                res_df, db_err = execute_sql(sql, DB_CONN)
                 
-                # Generate dynamic suggestions based on Persona
-                fallback_suggestions = get_persona_suggestions(st.session_state.persona, active_reg)
-                
-                cols = st.columns(len(fallback_suggestions))
-                for idx, suggestion in enumerate(fallback_suggestions):
-                    if cols[idx].button(suggestion, key=f"fail_sug_{idx}"):
-                        st.session_state.pending_prompt = suggestion
-                        st.rerun()
-                
-                st.info("Tip: Ensure the region mentioned in your question matches the 'Market Region' selected in the sidebar.")
-        
+                if res_df is not None and not res_df.empty:
+                    # FIX: Flexible Column Mapping for Vendor results
+                    # If it's a 'Top Vendor' query, columns are [vendor_name, total_value]
+                    x_col = res_df.columns[0]
+                    y_col = res_df.columns[1] if len(res_df.columns) > 1 else res_df.columns[0]
+                    
+                    if chart_type == "pie":
+                        fig = px.pie(res_df, names=x_col, title=f"Inventory: {active_reg}", hole=0.4)
+                    else:
+                        fig = px.bar(res_df, x=x_col, y=y_col, title=f"Analysis: {active_reg}", color=x_col)
+
+                    # Dynamic Metrics for Leadership/Finance
+                    metrics_data = None
+                    if any(col in res_df.columns for col in ["deal_value", "total_value"]):
+                        val_col = "deal_value" if "deal_value" in res_df.columns else "total_value"
+                        m1, m2 = st.columns(2)
+                        v_sum = f"${res_df[val_col].sum():,.0f}"
+                        v_avg = f"${res_df[val_col].mean():,.0f}"
+                        m1.metric("Total Value", v_sum)
+                        m2.metric("Average Value", v_avg)
+                        metrics_data = [{"label": "Total Value", "value": v_sum}, {"label": "Average Value", "value": v_avg}]
+                    
+                    st.plotly_chart(fig, use_container_width=True, key=f"new_chart_{time.time()}")
+                    
+                    with st.expander("Explore Dataset", expanded=False):
+                        st.dataframe(res_df, use_container_width=True)
+
+                    # Save to History
+                    st.session_state.chat_history.append({
+                        "question": active_prompt, "answer": f"Displaying {active_reg} Data:",
+                        "data": res_df, "chart": fig, "metrics": metrics_data
+                    })
+                    
+                    # SCROLL FIX
+                    components.html(
+                        f"""
+                        <script>
+                        var main = window.parent.document.querySelector('section.main');
+                        main.scrollTo({{ top: main.scrollHeight, behavior: 'smooth' }});
+                        </script>
+                        """, height=0
+                    )
+                    st.rerun()
+                else:
+                    st.warning(f"No records found for '{active_prompt}' in {active_reg}.")
