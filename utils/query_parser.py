@@ -3,32 +3,35 @@ import re
 def parse_query(question, region):
     q = question.lower()
     reg = region.upper()
-    networks = ["MAX US", "MAX Europe", "MAX Australia", "MAX LatAm", "MAX Asia", "MAX Africa", "MAX India", "MAX UK"]
-
-    if any(word in q for word in ["deal", "rights", "value"]):
-        table = "deals"
-        sql = f"SELECT * FROM {table} WHERE region = '{reg}'"
+    
+    # 1. DEALS
+    if "deal" in q or "rights" in q:
+        sql = f"SELECT * FROM deals WHERE region = '{reg}'"
         return sql + ";", None, "bar"
 
-    if any(word in q for word in ["work order", "wo-", "task", "asset"]):
-        table = "work_orders"
-        sql = f"SELECT * FROM {table} WHERE region = '{reg}'"
+    # 2. WORK ORDERS
+    if "order" in q or "task" in q:
+        sql = f"SELECT * FROM work_orders WHERE region = '{reg}'"
+        if "delayed" in q: sql += " AND status = 'Delayed'"
         return sql + ";", None, "pie"
 
-    if any(word in q for word in ["content", "show", "status", "max"]):
-        table = "content_planning"
-        sql = f"SELECT * FROM {table} WHERE region = '{reg}'"
+    # 3. CONTENT (Executive)
+    if any(word in q for word in ["content", "show", "max", "status"]):
+        sql = f"SELECT * FROM content_planning WHERE region = '{reg}'"
         
+        # Specific Network variety
+        networks = ["MAX US", "MAX Europe", "MAX Australia", "MAX LatAm", "MAX Asia", "MAX India"]
         for net in networks:
             if net.lower() in q:
                 sql += f" AND network = '{net}'"
         
-        match = re.search(r"(?:about|for|show)\s+(.*)", q)
+        # Simple Title search
+        match = re.search(r"(?:for|about)\s+(.*)", q)
         if match:
-            potential_title = match.group(1).strip()
-            if potential_title.upper() not in ["APAC", "EMEA", "NA", "LATAM", "STATUS"]:
-                sql += f" AND content_title LIKE '%{potential_title.title()}%'"
-
+            title = match.group(1).strip().title()
+            if title not in ["Apac", "Emea", "Latam", "Na"]:
+                sql += f" AND content_title LIKE '%{title}%'"
+                
         return sql + ";", None, "pie"
 
-    return None, "Request not recognized. Try asking about Content, Work Orders, or Deals.", None
+    return None, "Please specify if you want to see Content, Work Orders, or Deals.", None
