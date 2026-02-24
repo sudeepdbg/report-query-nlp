@@ -2,25 +2,26 @@ import re
 
 def parse_query(question, region):
     """
-    Refined Persona-Aware Parser.
-    Handles Region detection, Persona-specific keywords, and 
-    strict database mapping for Deals, Work Orders, and Content.
+    Advanced Industry-Aware Parser.
+    Handles Region sync, Persona-specific intent, and fuzzy keyword matching.
     """
     q = question.lower()
     
-    # 1. REGION DETECTION (Text mentions override sidebar state)
+    # 1. REGION DETECTION (Overrides sidebar if mentioned in text)
     active_reg = region.upper()
     for r in ["NA", "APAC", "EMEA", "LATAM"]:
         if r.lower() in q:
             active_reg = r
             break
 
-    # 2. INTENT: FINANCIALS & VENDORS (Leadership / Finance / Product)
-    if any(word in q for word in ["deal", "rights", "value", "vendor", "budget", "negotiat", "cost", "spend", "kpi", "summary"]):
-        # Vendor Ranking Logic
-        if "vendor" in q or "who" in q:
+    # 2. INTENT: FINANCIALS, VENDORS & STUDIO DEALS
+    # Triggers on: vendor, studio, deal, cost, spend, value, budget, payment
+    if any(word in q for word in ["vendor", "studio", "deal", "cost", "spend", "value", "budget", "payment", "rights"]):
+        
+        # Scenario: Vendor Ranking (Aggregated)
+        if any(word in q for word in ["vendor", "who", "top", "rank"]):
             sql = f"""
-                SELECT vendor_name, SUM(deal_value) as total_value 
+                SELECT vendor_name, SUM(deal_value) as total_value, COUNT(*) as deal_count
                 FROM deals 
                 WHERE region = '{active_reg}' 
                 GROUP BY vendor_name 
@@ -28,57 +29,61 @@ def parse_query(question, region):
             """
             return sql.strip() + ";", None, "bar"
         
-        # Rights breakdown for Product Persona
-        if "scope" in q or "breakdown" in q or "type" in q:
-            return f"SELECT rights_scope, count(*) as count FROM deals WHERE region = '{active_reg}' GROUP BY rights_scope;", None, "bar"
-            
-        # Summary/Executive Overview
-        if "summary" in q or "overview" in q:
-            return f"SELECT * FROM deals WHERE region = '{active_reg}' LIMIT 50;", None, "bar"
+        # Scenario: Payment Terms/Finance
+        if "payment" in q or "term" in q or "net" in q:
+            return f"SELECT payment_terms, COUNT(*) as count FROM deals WHERE region = '{active_reg}' GROUP BY payment_terms;", None, "pie"
 
-        # Default Deals list
-        sql = f"SELECT * FROM deals WHERE region = '{active_reg}'"
-        if "active" in q: sql += " AND status = 'Active'"
-        return sql + " ORDER BY deal_value DESC;", None, "bar"
+        # Scenario: Rights Complexity (SVOD, Exclusive, etc.)
+        if "rights" in q or "exclusive" in q or "scope" in q:
+            return f"SELECT rights_scope, COUNT(*) as count FROM deals WHERE region = '{active_reg}' GROUP BY rights_scope;", None, "bar"
 
-    # 3. INTENT: OPERATIONAL TASKS (Operations Persona)
-    if any(word in q for word in ["order", "task", "localiz", "dub", "sub", "duplo", "qa", "packaging", "queue", "delay"]):
-        sql = f"SELECT * FROM work_orders WHERE region = '{active_reg}'"
-        
-        if "delayed" in q or "delay" in q: 
-            sql += " AND status = 'Delayed'"
-        if "duplo" in q: 
-            sql += " AND work_status LIKE '%Duplo%'"
-        if "packaging" in q:
-            sql += " AND work_status = 'Packaging'"
-        
-        if "language" in q or "lang" in q:
-            return f"SELECT language_target, count(*) as count FROM work_orders WHERE region = '{active_reg}' GROUP BY language_target;", None, "pie"
-            
-        return sql + " ORDER BY id DESC;", None, "pie"
+        # Default: List of Deals
+        return f"SELECT * FROM deals WHERE region = '{active_reg}' ORDER BY deal_value DESC;", None, "bar"
 
-    # 4. INTENT: CONTENT & SVOD (Product Persona)
-    if any(word in q for word in ["content", "ready", "max", "acqui", "inventory", "svod", "available", "show"]):
-        sql = f"SELECT * FROM content_planning WHERE region = '{active_reg}'"
+    # 3. INTENT: SUPPLY CHAIN & OPERATIONS (Work Orders)
+    # Triggers on: order, task, duplo, queue, delay, asset, mastering, qa, dub, sub
+    if any(word in q for word in ["order", "task", "duplo", "queue", "delay", "asset", "mastering", "qa", "dub", "sub", "work"]):
         
-        # Filter for specific Readiness keywords
-        if any(word in q for word in ["ready", "delivered", "available", "complete"]):
-            sql += " AND status IN ('Delivered', 'Scheduled', 'Fulfilled')"
+        # Scenario: High Priority or Bottlenecks
+        if "delay" in q or "critical" in q or "failed" in q:
+            sql = f"SELECT * FROM work_orders WHERE region = '{active_reg}' AND (status = 'Delayed' OR priority = 'Critical')"
+            return sql + ";", None, "pie"
+
+        # Scenario: Language/Localization breakdown
+        if "language" in q or "lang" in q or "target" in q:
+            return f"SELECT language_target, COUNT(*) as count FROM work_orders WHERE region = '{active_reg}' GROUP BY language_target;", None, "pie"
+
+        # Scenario: Specific Asset Types (Atmos, Mezzanine)
+        if "asset" in q or "file" in q or "type" in q:
+            return f"SELECT asset_type, COUNT(*) as count FROM work_orders WHERE region = '{active_reg}' GROUP BY asset_type;", None, "bar"
+
+        # Default: Work Order List
+        return f"SELECT * FROM work_orders WHERE region = '{active_reg}' ORDER BY due_date ASC;", None, "pie"
+
+    # 4. INTENT: CONTENT STRATEGY & WINDOWING (Content Planning)
+    # Triggers on: content, ready, max, inventory, window, holdback, schedule, title
+    if any(word in q for word in ["content", "ready", "max", "inventory", "window", "holdback", "schedule", "title", "svod"]):
         
-        if "acquired" in q:
-            sql += " AND acquisition_status = 'Acquired'"
-            
-        # Specific search for a title
-        match = re.search(r"(?:for|about|show)\s+([\w\s]+)", q)
+        # Scenario: Windowing and Holdbacks (Leadership/Product)
+        if "window" in q or "holdback" in q:
+            return f"SELECT window_type, COUNT(*) as count FROM content_planning WHERE region = '{active_reg}' GROUP BY window_type;", None, "bar"
+
+        # Scenario: Readiness Status
+        if "ready" in q or "status" in q or "available" in q:
+            return f"SELECT status, COUNT(*) as count FROM content_planning WHERE region = '{active_reg}' GROUP BY status;", None, "pie"
+
+        # Scenario: Specific Title Search
+        # Uses regex to find title after 'show', 'find', or 'about'
+        match = re.search(r"(?:show|find|about)\s+([\w\s]+)", q)
         if match:
-            potential_title = match.group(1).strip().title()
-            # Filter out region names from being treated as content titles
-            if potential_title.upper() not in ["APAC", "EMEA", "LATAM", "NA"]:
-                sql += f" AND content_title LIKE '%{potential_title}%'"
-                
-        return sql + ";", None, "pie"
+            title_query = match.group(1).strip()
+            # Avoid matching region names as titles
+            if title_query.upper() not in ["APAC", "EMEA", "LATAM", "NA"]:
+                return f"SELECT * FROM content_planning WHERE content_title LIKE '%{title_query}%' AND region = '{active_reg}';", None, "pie"
 
-    # 5. GLOBAL FALLBACK (Guarantees a result instead of an error)
-    # If a region is identified, we show the most relevant table for that region
-    fallback_sql = f"SELECT * FROM content_planning WHERE region = '{active_reg}' LIMIT 20;"
-    return fallback_sql, None, "pie"
+        # Default: Content Planning List
+        return f"SELECT * FROM content_planning WHERE region = '{active_reg}' LIMIT 100;", None, "pie"
+
+    # 5. GLOBAL FALLBACK
+    # If a region is mentioned but no intent is clear, show the most critical data: Deals
+    return f"SELECT * FROM deals WHERE region = '{active_reg}' LIMIT 20;", None, "bar"
