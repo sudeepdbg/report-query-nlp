@@ -4,60 +4,81 @@ import plotly.express as px
 from utils.database import init_database, execute_sql
 from utils.query_parser import parse_query
 
+# Page config & UI Setup
 st.set_page_config(page_title="Foundry Vantage", page_icon="🎥", layout="wide")
 
 @st.cache_resource
-def get_database_connection():
+def get_db():
     return init_database()
 
-DB_CONN = get_database_connection()
+DB_CONN = get_db()
 
-# --- Dynamic Suggestions Logic ---
-SUGGESTIONS = {
-    "executive": {
-        "NA": ["How many content items are Delivered in NA?", "Show all MAX US content"],
-        "APAC": ["List content status for MAX Australia", "Total content planned in APAC"],
-        "EMEA": ["Show me MAX Europe content status", "How many items are Not Ready in EMEA?"]
-    },
-    "workorders": {
-        "NA": ["Show all delayed work orders in NA", "List top vendors in NA"],
-        "APAC": ["How many work orders are In Progress in APAC?", "Show delayed orders for Vendor B"],
-        "EMEA": ["Pending review work orders in EMEA", "Show me priority A orders in EMEA"]
-    },
-    "deals": {
-        "APAC": ["Show active deals in APAC", "Top vendors by deal value in APAC"],
-        "NA": ["List all pending deals in NA", "Total deal value for Warner Bros"],
-        "EMEA": ["Active deals in EMEA", "Show deals for Sky in EMEA"]
-    }
-}
-
-# Session State
+# Session State for persistence
 if 'chat_history' not in st.session_state: st.session_state.chat_history = []
 if 'current_region' not in st.session_state: st.session_state.current_region = 'APAC'
-if 'active_dashboard' not in st.session_state: st.session_state.active_dashboard = 'executive'
 
-# --- Sidebar ---
+# --- Sidebar Configuration ---
 with st.sidebar:
     st.title("🎥 Foundry Vantage")
     st.caption("Intelligence Layer for Media Supply Chain")
     st.divider()
     
+    # Global Region Filter
     st.session_state.current_region = st.selectbox("Market Region", ["NA", "APAC", "EMEA", "LATAM"])
     
-    dash_options = {"Executive Content": "executive", "Work Order Tracker": "workorders", "Deals Performance": "deals"}
-    selected_dash = st.radio("Active Insight Layer", list(dash_options.keys()))
-    st.session_state.active_dashboard = dash_options[selected_dash]
+    # Context Selection
+    st.radio("Active Insight Layer", ["Executive Content", "Work Order Tracker", "Deals Performance"])
 
-    st.subheader("💡 Suggested Queries")
-    current_suggestions = SUGGESTIONS.get(st.session_state.active_dashboard, {}).get(st.session_state.current_region, ["Show total count"])
-    
-    for sugg in current_suggestions:
-        if st.button(sugg, width='stretch'):
-            st.session_state.pending_prompt = sugg
-            st.rerun()
+    st.divider()
+    st.subheader("💡 Suggestions")
+    if st.button("List content status for MAX Australia", width='stretch'):
+        st.session_state.pending_prompt = "List content status for MAX Australia"
+        st.rerun()
 
-# --- Main Chat ---
+# --- Main Application Logic ---
 st.title("🔍 Ask Foundry Vantage")
+
+# Handle user input
+prompt = st.chat_input("Ask a question about your media supply chain...")
+if st.session_state.get('pending_prompt'):
+    prompt = st.session_state.pending_prompt
+    del st.session_state.pending_prompt
+
+if prompt:
+    # REGION LOGIC: Determine if we use Sidebar or Prompt intent
+    active_reg = st.session_state.current_region
+    for r in ["NA", "APAC", "EMEA", "LATAM"]:
+        if r.lower() in prompt.lower():
+            active_reg = r
+    
+    with st.spinner(f"Analyzing {active_reg} data..."):
+        # Parse NL to SQL
+        sql, error, chart_type = parse_query(prompt, active_reg)
+        
+        if error:
+            st.error(error)
+        else:
+            # Execute SQL
+            res_df, exec_err = execute_sql(sql, DB_CONN)
+            
+            if res_df is not None and not res_df.empty:
+                # Chart Generation Logic
+                fig = None
+                if chart_type == "pie" and 'status' in res_df.columns:
+                    fig = px.pie(res_df, names='status', title=f"Status Distribution: {active_reg}", hole=0.4)
+                elif chart_type == "bar" and 'vendor' in res_df.columns:
+                    val_col = 'deal_value' if 'deal_value' in res_df.columns else 'vendor'
+                    fig = px.bar(res_df, x='vendor', y=val_col, title=f"Vendor Analysis: {active_reg}")
+
+                # Save to history
+                st.session_state.chat_history.append({
+                    "question": prompt,
+                    "answer": f"I found {len(res_df)} records for {active_reg}:",
+                    "data": res_df,
+                    "chart": fig
+                })
+            else:
+                st.warning(f"No matching records found for that specific request in {active_reg}.")
 
 # Display Chat History
 for i, msg in enumerate(st.session_state.chat_history):
@@ -66,67 +87,7 @@ for i, msg in enumerate(st.session_state.chat_history):
     
     with st.chat_message("assistant", avatar="🎥"):
         st.write(msg["answer"])
-        
-        # Render Graph if available
-        if msg.get("chart") is not None:
+        if msg["chart"]:
             st.plotly_chart(msg["chart"], width='stretch')
-            
-        # Render Table
-        if msg.get("data") is not None:
-            with st.expander("View Detailed Records"):
-                st.dataframe(msg["data"], width='stretch')
-        
-        # Feedback mechanism
-        col1, col2, _ = st.columns([1, 1, 10])
-        with col1:
-            if st.button("👍", key=f"up_{i}"): st.toast("Feedback recorded!")
-        with col2:
-            if st.button("👎", key=f"down_{i}"): st.toast("Feedback recorded!")
-
-# Handle Input
-prompt = st.chat_input("Ask a question...")
-if st.session_state.get('pending_prompt'):
-    prompt = st.session_state.pending_prompt
-    del st.session_state.pending_prompt
-
-if prompt:
-    with st.spinner("Querying Database..."):
-        # The parser now returns the chart type required
-        sql, error, chart_type = parse_query(prompt, st.session_state.current_region)
-        
-        if error:
-            ans, res_df, fig = f"⚠️ {error}", None, None
-        else:
-            res_df, exec_err = execute_sql(sql, DB_CONN)
-            if exec_err:
-                ans, res_df, fig = f"Query error: {exec_err}", None, None
-            elif res_df.empty:
-                ans, res_df, fig = "No results found for this filter.", None, None
-            else:
-                ans = f"I found {len(res_df)} results in {st.session_state.current_region}:"
-                
-                # --- AUTOMATIC CHART GENERATION ---
-                fig = None
-                try:
-                    if chart_type == "pie" and "status" in res_df.columns:
-                        counts = res_df['status'].value_counts().reset_index()
-                        counts.columns = ['Status', 'Count']
-                        fig = px.pie(counts, names='Status', values='Count', hole=0.4, title="Status Breakdown")
-                    
-                    elif chart_type == "bar" and "vendor" in res_df.columns:
-                        # Use deal_value for Deals, or simple count for Work Orders
-                        val_col = 'deal_value' if 'deal_value' in res_df.columns else 'vendor'
-                        chart_data = res_df.groupby('vendor')[val_col].count() if val_col == 'vendor' else res_df.groupby('vendor')[val_col].sum()
-                        chart_data = chart_data.nlargest(5).reset_index()
-                        chart_data.columns = ['Vendor', 'Metric']
-                        fig = px.bar(chart_data, x='Vendor', y='Metric', title="Top Vendors Performance")
-                except Exception as e:
-                    print(f"Chart Error: {e}")
-
-        st.session_state.chat_history.append({
-            "question": prompt, 
-            "answer": ans, 
-            "data": res_df, 
-            "chart": fig
-        })
-        st.rerun()
+        with st.expander("View Data Records"):
+            st.dataframe(msg["data"], width='stretch')
