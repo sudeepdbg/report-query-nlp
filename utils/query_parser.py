@@ -2,22 +2,37 @@ import re
 
 def parse_query(question, region):
     """
-    Advanced NL to SQL parser for Media Supply Chain.
-    Handles Rights, Acquisition, Localization, and Duplo Work Status.
+    Advanced NL to SQL parser with strict Network-Market mapping.
+    Prevents regional leakage (e.g., India/Australia data appearing in LATAM).
     """
     q = question.lower()
     reg = region.upper()
+
+    # Define strict mapping to ensure data integrity per region
+    network_map = {
+        "LATAM": ["MAX LatAm"],
+        "APAC": ["MAX Australia", "MAX Asia", "MAX India"],
+        "EMEA": ["MAX Europe", "MAX Africa", "MAX UK"],
+        "NA": ["MAX US"]
+    }
     
     # 1. RIGHTS & DEALS (Numerical/Financial -> BAR CHART)
-    # Context: SVOD/Linear rights, Deal values, Negotiating status
     if any(word in q for word in ["deal", "rights", "value", "cost", "negotiat", "scope"]):
+        # Pivot logic: If asking about SVOD rights, we must query content_planning
+        if "svod" in q:
+            sql = f"SELECT content_title, network, rights_type, status FROM content_planning WHERE region = '{reg}'"
+            # Apply regional network filter
+            if reg in network_map:
+                nets = "', '".join(network_map[reg])
+                sql += f" AND network IN ('{nets}')"
+            
+            if "ready" in q or "delivered" in q:
+                sql += " AND status IN ('Delivered', 'Scheduled', 'Fulfilled')"
+                
+            return sql + ";", None, "bar"
+        
         table = "deals"
         sql = f"SELECT * FROM {table} WHERE region = '{reg}'"
-        
-        # Rights-specific logic: If asking about SVOD, check content_planning rights_type
-        if "svod" in q: 
-            return f"SELECT content_title, network, rights_type FROM content_planning WHERE region = '{reg}' AND rights_type = 'SVOD Exclusive';", None, "bar"
-        
         if "active" in q: sql += " AND status = 'Active'"
         if "scope" in q: 
             return f"SELECT rights_scope, count(*) as total_deals FROM deals WHERE region = '{reg}' GROUP BY rights_scope;", None, "bar"
@@ -26,7 +41,6 @@ def parse_query(question, region):
         return sql + ";", None, "bar"
 
     # 2. LOCALIZATION & WORK ORDERS (Operational -> PIE CHART)
-    # Context: Duplo status, Subtitling/Dubbing tasks, Language targets
     if any(word in q for word in ["order", "task", "localiz", "dub", "sub", "duplo", "qa"]):
         table = "work_orders"
         sql = f"SELECT * FROM {table} WHERE region = '{reg}'"
@@ -40,10 +54,14 @@ def parse_query(question, region):
         return sql + ";", None, "pie"
 
     # 3. CONTENT & ACQUISITION READINESS (Inventory -> PIE CHART)
-    # Context: Acquisition status, Market-ready content, Localization available
-    if any(word in q for word in ["content", "show", "max", "ready", "acqui", "localization status", "available"]):
+    if any(word in q for word in ["content", "show", "max", "ready", "acqui", "localization", "available"]):
         table = "content_planning"
         sql = f"SELECT * FROM {table} WHERE region = '{reg}'"
+        
+        # STRICT REGIONAL ENFORCEMENT
+        if reg in network_map:
+            nets = "', '".join(network_map[reg])
+            sql += f" AND network IN ('{nets}')"
         
         # Acquisition filters
         if "acquired" in q: sql += " AND acquisition_status = 'Acquired'"
@@ -54,11 +72,9 @@ def parse_query(question, region):
             if "complete" in q: sql += " AND localization_status = 'Completed'"
             else: sql += " AND localization_status != 'Completed'"
         
-        # Network filtering
-        networks = ["MAX US", "MAX Europe", "MAX Australia", "MAX LatAm", "MAX Asia", "MAX India", "MAX UK"]
-        for net in networks:
-            if net.lower() in q:
-                sql += f" AND network = '{net}'"
+        # Specific readiness filters
+        if "ready" in q or "delivered" in q:
+            sql += " AND status IN ('Delivered', 'Scheduled', 'Fulfilled')"
 
         # Content Title Extraction
         match = re.search(r"(?:for|about|show)\s+(.*)", q)
@@ -69,5 +85,4 @@ def parse_query(question, region):
             
         return sql + ";", None, "pie"
 
-    # Fallback for unrecognized intent
-    return None, "Intent not clear. Please ask about 'Rights', 'Localization Status', 'Acquisition Readiness', or 'Duplo Work Status'.", None
+    return None, "Intent not clear. Please ask about 'Rights', 'Localization Status', 'Acquisition Readiness', or 'Duplo Status'.", None
