@@ -16,10 +16,9 @@ DB_CONN = get_db()
 if 'chat_history' not in st.session_state: st.session_state.chat_history = []
 if 'current_region' not in st.session_state: st.session_state.current_region = 'APAC'
 
-# --- 1. ENHANCED DYNAMIC SUGGESTION ENGINE (6 Scenarios) ---
+# --- 1. ENHANCED DYNAMIC SUGGESTION ENGINE ---
 def get_dynamic_suggestions(last_query, region):
     q = last_query.lower()
-    # Context: Localization, Duplo & Work Orders
     if any(word in q for word in ["local", "order", "task", "duplo", "qa"]):
         return [
             f"Show Duplo queue status for {region}",
@@ -29,7 +28,6 @@ def get_dynamic_suggestions(last_query, region):
             f"Show high priority tasks for {region}",
             f"What is the Packaging status for {region}?"
         ]
-    # Context: Deals, Rights & SVOD
     elif any(word in q for word in ["deal", "rights", "svod", "value"]):
         return [
             f"Show SVOD Exclusive rights in {region}",
@@ -39,7 +37,6 @@ def get_dynamic_suggestions(last_query, region):
             f"Total budget for {region} market",
             f"Check pending acquisitions in {region}"
         ]
-    # Default Context: Content Readiness & Inventory
     return [
         f"Which content is 'Not Ready' in {region}?",
         f"Show localization status for {region}",
@@ -55,7 +52,7 @@ with st.sidebar:
     st.caption("Supply Chain Intelligence Layer")
     st.divider()
     
-    # Regional Filter with session state sync
+    # Regional Filter with forced index sync
     market_options = ["NA", "APAC", "EMEA", "LATAM"]
     selected_market = st.selectbox(
         "Market Region", 
@@ -68,7 +65,6 @@ with st.sidebar:
     st.divider()
     st.subheader("💡 Suggested Queries")
     
-    # Generate 6 dynamic buttons based on context
     last_q = st.session_state.chat_history[-1]["question"] if st.session_state.chat_history else ""
     suggestions = get_dynamic_suggestions(last_q, st.session_state.current_region)
     
@@ -86,12 +82,19 @@ if st.session_state.get('pending_prompt'):
     del st.session_state.pending_prompt
 
 if prompt:
-    # AUTO-SYNC: Update region if user mentions a different one in text
-    active_reg = st.session_state.current_region
+    # SYNC FIX: Explicitly check if the user is asking about a different region
+    detected_reg = st.session_state.current_region
     for r in ["NA", "APAC", "EMEA", "LATAM"]:
         if r.lower() in prompt.lower():
-            active_reg = r
-            st.session_state.current_region = r 
+            detected_reg = r
+            break
+    
+    # If a new region is found in text, update state and rerun to sync sidebar
+    if detected_reg != st.session_state.current_region:
+        st.session_state.current_region = detected_reg
+        st.rerun()
+
+    active_reg = st.session_state.current_region
     
     with st.spinner(f"Analyzing {active_reg} infrastructure..."):
         sql, error, chart_type = parse_query(prompt, active_reg)
@@ -103,17 +106,16 @@ if prompt:
             if res_df is not None and not res_df.empty:
                 fig = None
                 if chart_type == "pie":
-                    # Smart column selection for labels
                     label_col = 'status' if 'status' in res_df.columns else res_df.columns[-1]
                     fig = px.pie(res_df, names=label_col, title=f"Distribution: {active_reg}", hole=0.4)
                 elif chart_type == "bar":
                     y_axis = 'deal_value' if 'deal_value' in res_df.columns else res_df.columns[0]
+                    # Using column 1 (usually name/vendor) for x-axis
                     fig = px.bar(res_df, x=res_df.columns[1], y=y_axis, title=f"Analysis: {active_reg}")
 
-                # Save interaction to history
                 st.session_state.chat_history.append({
                     "question": prompt,
-                    "answer": f"Results for {active_reg}:",
+                    "answer": f"I found {len(res_df)} results for {active_reg}:",
                     "data": res_df,
                     "chart": fig
                 })
@@ -121,7 +123,6 @@ if prompt:
                 st.warning(f"No specific records found for '{prompt}' in {active_reg}.")
 
 # --- Display History ---
-# IMPORTANT: Unique 'key' parameters here fix the DuplicateElementId error
 for i, msg in enumerate(st.session_state.chat_history):
     with st.chat_message("user"):
         st.write(msg["question"])
