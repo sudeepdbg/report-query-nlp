@@ -14,43 +14,35 @@ def get_db():
     return init_database()
 DB_CONN = get_db()
 
-# Initialize history
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 
-# --- 1. SIDEBAR ---
+# --- 1. SIDEBAR (Master Filter) ---
 with st.sidebar:
     st.title("🎥 Foundry Vantage")
-    st.caption("v5.9 Stable Build")
+    st.caption("v6.0 Enterprise Ready")
     
-    # Use on_change to force a clean update when the user clicks
+    # Selection directly updates session_state
     region = st.selectbox("Market Region", ["APAC", "EMEA", "NA", "LATAM"], key="sb_region")
     persona = st.selectbox("View Persona", ["Leadership", "Product", "Operations", "Finance"], key="sb_persona")
     
     st.divider()
-    st.subheader("💡 Suggestions")
-    for i, sug in enumerate(["Top vendors", "Market value", "Vendor performance"]):
-        if st.button(f"{sug} in {region}", key=f"btn_sug_{i}"):
-            # Injecting the query directly into the session state
-            st.session_state.current_query = f"{sug} in {region}"
+    if st.button("Clear Chat", width="stretch"):
+        st.session_state.chat_history = []
+        st.rerun()
 
-# --- 2. QUERY LOGIC ---
+# --- 2. EXECUTION ---
 chat_input = st.chat_input("Ask about deals, vendors, or work orders...")
-query = chat_input or st.session_state.get('current_query')
 
-if query:
-    # Clear the suggestion so it doesn't loop
-    if 'current_query' in st.session_state:
-        del st.session_state.current_query
-    
-    # ALWAYS use the sidebar variable (region) here to ensure the filter works
-    sql, _, c_type = parse_query(query, region)
+if chat_input:
+    # Use the SIDEBAR region for the parser
+    sql, _, c_type = parse_query(chat_input, st.session_state.sb_region)
     chart_df, _ = execute_sql(sql, DB_CONN)
 
     if chart_df is not None and not chart_df.empty:
-        # Get full data for Tableau
-        target = "work_orders" if "performance" in query.lower() else "deals"
-        full_sql = f"SELECT * FROM {target} WHERE UPPER(region) = '{region.upper()}'"
+        # Determine target table
+        target = "work_orders" if "performance" in chat_input.lower() else "deals"
+        full_sql = f"SELECT * FROM {target} WHERE UPPER(region) = '{st.session_state.sb_region.upper()}'"
         full_df, _ = execute_sql(full_sql, DB_CONN)
 
         # Plot
@@ -59,17 +51,17 @@ if query:
         else:
             fig = px.bar(chart_df, y=chart_df.columns[0], x=chart_df.columns[1], orientation='h')
         
-        # Save to history
+        # Save
         st.session_state.chat_history.append({
-            "query": query,
+            "query": chat_input,
             "fig": fig,
             "full_df": full_df,
-            "region": region,
+            "region": st.session_state.sb_region,
             "id": time.time()
         })
 
-# --- 3. RENDER ---
-st.title(f"🔍 {persona} Intelligence: {region}")
+# --- 3. DISPLAY FEED ---
+st.title(f"🔍 {st.session_state.sb_persona} Intelligence: {st.session_state.sb_region}")
 
 for i, entry in enumerate(st.session_state.chat_history):
     with st.chat_message("user"):
@@ -80,9 +72,9 @@ for i, entry in enumerate(st.session_state.chat_history):
         
         st.markdown("### 📊 Enterprise Actions")
         c1, c2 = st.columns([3, 1])
-        t_name = c1.text_input("Tableau Name", value=f"Report_{i}", key=f"in_{entry['id']}")
+        t_name = c1.text_input("Report Name", value=f"Report_{i}", key=f"in_{entry['id']}")
         if c2.button("🚀 Push to Tableau", key=f"pb_{entry['id']}", width="stretch"):
-            with st.spinner("Syncing..."):
+            with st.spinner("Pushing..."):
                 success, msg = trigger_tableau_report(entry["full_df"], t_name)
                 if success: st.success(msg)
                 else: st.error(msg)
@@ -90,8 +82,8 @@ for i, entry in enumerate(st.session_state.chat_history):
         with st.expander("📝 View Records"):
             st.dataframe(entry["full_df"], width="stretch")
 
-# --- 4. SCROLL ---
-if query:
+# --- 4. SCROLL FIX ---
+if chat_input:
     components.html(
         f"""<script>
         var main = window.parent.document.querySelector('section.main');
