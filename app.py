@@ -21,7 +21,7 @@ if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 
 def sync_region_from_query(query_text):
-    """Overrides global state if a specific region is mentioned in the input."""
+    """Force override global region state if mentioned in search."""
     regions = ["NA", "APAC", "EMEA", "LATAM"]
     for r in regions:
         if r in query_text.upper():
@@ -33,13 +33,14 @@ def sync_region_from_query(query_text):
 user_input = st.chat_input("Ask about deals, vendors, or work orders...")
 active_q = st.session_state.get('active_query') or user_input
 
+# CRITICAL: Sync region BEFORE the sidebar or charts are drawn
 if active_q:
     sync_region_from_query(active_q)
 
 # --- 3. SIDEBAR ---
 with st.sidebar:
     st.title("🎥 Foundry Vantage")
-    st.caption("v4.5 Pro Visualization")
+    st.caption("v5.0 Enterprise Analytics")
     
     region_options = ["NA", "APAC", "EMEA", "LATAM"]
     current_idx = region_options.index(st.session_state.current_region)
@@ -48,7 +49,7 @@ with st.sidebar:
         "Market Region", 
         region_options, 
         index=current_idx,
-        key=f"reg_widget_{st.session_state.current_region}" # Reset widget on state change
+        key=f"reg_widget_{st.session_state.current_region}"
     )
     
     if selected_reg != st.session_state.current_region:
@@ -62,7 +63,7 @@ with st.sidebar:
     prompts = {
         "Leadership": ["Top vendors", "Market value", "Vendor performance"],
         "Product": ["Content readiness", "SVOD rights", "Inventory status"],
-        "Operations": ["Delayed tasks", "Work orders", "Vendor performance"],
+        "Operations": ["Delayed tasks", "Work orders", "Performance"],
         "Finance": ["Total spend", "Highest cost deals", "Market value overview"]
     }
     
@@ -92,7 +93,7 @@ if active_q:
     chart_df, db_err = execute_sql(sql, DB_CONN)
 
     if chart_df is not None and not chart_df.empty:
-        # Determine target table for the multi-column record view
+        # Table mapping for the detailed records view
         target_table = "deals"
         low_q = active_q.lower()
         if any(x in low_q for x in ["task", "order", "performance", "delay"]):
@@ -100,41 +101,42 @@ if active_q:
         elif any(x in low_q for x in ["ready", "inventory", "status"]):
             target_table = "content_planning"
 
+        # The Table Query now strictly follows the synced session state
         full_sql = f"SELECT * FROM {target_table} WHERE UPPER(region) = '{st.session_state.current_region.upper()}'"
         full_df, _ = execute_sql(full_sql, DB_CONN)
 
         with st.chat_message("assistant"):
             label, val = chart_df.columns[0], chart_df.columns[1] if len(chart_df.columns) > 1 else chart_df.columns[0]
             
-            # --- PROFESSIONAL CHART RENDERING ---
+            # --- PROFESSIONAL MIX-AND-MATCH VIZ ---
             if c_type == "pie":
                 fig = px.pie(chart_df, names=label, values=val, hole=0.5,
-                             color_discrete_sequence=px.colors.qualitative.Pastel,
-                             title=f"Distribution: {st.session_state.current_region}")
+                             color_discrete_sequence=px.colors.qualitative.Prism,
+                             title=f"Market Distribution ({st.session_state.current_region})")
             
             elif c_type == "treemap":
-                fig = px.treemap(chart_df, path=[label, 'deal_name'], values='deal_value',
+                fig = px.treemap(chart_df, path=['vendor_name', 'deal_name'], values='deal_value',
                                  color='deal_value', color_continuous_scale='Blues',
-                                 title=f"Value Breakdown: {st.session_state.current_region}")
+                                 title=f"Market Value Composition ({st.session_state.current_region})")
             
-            else:
+            elif c_type == "bar_v":
+                fig = px.bar(chart_df, x=label, y=val, color=val, 
+                             color_continuous_scale='Reds', template="plotly_white",
+                             title=f"Top Individual Deals by Cost ({st.session_state.current_region})")
+            
+            else: # bar_h (Ranking)
                 fig = px.bar(chart_df, y=label, x=val, orientation='h',
-                             color=val, color_continuous_scale='Viridis',
-                             template="plotly_white",
-                             title=f"Ranking: {st.session_state.current_region}")
+                             color=val, color_continuous_scale='Viridis', template="plotly_white",
+                             title=f"Vendor Ranking ({st.session_state.current_region})")
                 fig.update_layout(yaxis={'categoryorder':'total ascending'})
 
             st.plotly_chart(fig, use_container_width=True, key=f"new_{time.time()}")
             
-            # --- DETAILED TABULAR VIEW ---
             with st.expander("Explore Full Transactional Records", expanded=True):
                 st.dataframe(full_df, use_container_width=True)
-                csv = full_df.to_csv(index=False).encode('utf-8')
-                st.download_button("📥 Download Report", data=csv, file_name="report.csv", mime='text/csv')
+                st.download_button("📥 Download Report", data=full_df.to_csv(index=False), file_name="report.csv")
 
             st.session_state.chat_history.append({"q": active_q, "fig": fig, "full_df": full_df})
-            
-            # Scroll to bottom script
             components.html("<script>window.parent.document.querySelector('section.main').scrollTo(0,10000);</script>", height=0)
             st.rerun()
     else:
