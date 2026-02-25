@@ -11,9 +11,11 @@ def init_database():
     conn = get_db_connection()
     c = conn.cursor()
 
-    # Create Tables
+    # 1. Master Tables
     c.execute('CREATE TABLE vendors (vendor_id INTEGER PRIMARY KEY, vendor_name TEXT, rating REAL)')
     c.execute('CREATE TABLE titles (title_id INTEGER PRIMARY KEY, title_name TEXT, studio TEXT)')
+
+    # 2. Transactional Tables
     c.execute('''CREATE TABLE deals (
         id INTEGER PRIMARY KEY, vendor_id INTEGER, deal_name TEXT, 
         deal_value REAL, region TEXT, status TEXT)''')
@@ -23,36 +25,33 @@ def init_database():
     c.execute('''CREATE TABLE content_planning (
         id INTEGER PRIMARY KEY, title_id INTEGER, status TEXT, region TEXT)''')
 
-    # 1. Populate Core Master Data
-    vendor_list = [(1, 'PixelPerfect', 4.8), (2, 'GlobalDub', 3.9), (3, 'StreamOps', 4.2), (4, 'VisionPost', 3.5)]
-    c.executemany("INSERT INTO vendors VALUES (?,?,?)", vendor_list)
+    # SEED MASTER DATA
+    v_data = [(1, 'PixelPerfect', 4.8), (2, 'GlobalDub', 3.9), (3, 'StreamOps', 4.2), (4, 'VisionPost', 3.5)]
+    c.executemany("INSERT INTO vendors VALUES (?,?,?)", v_data)
 
-    title_list = [(101, 'The Penguin', 'Warner Bros'), (102, 'Dune: Prophecy', 'Legendary'), 
-                  (103, 'The Last of Us', 'Sony'), (104, 'House of the Dragon', 'HBO')]
-    c.executemany("INSERT INTO titles VALUES (?,?,?)", title_list)
+    t_data = [(101, 'The Penguin', 'Warner Bros'), (102, 'Dune: Prophecy', 'Legendary'), 
+              (103, 'The Last of Us', 'Sony'), (104, 'House of the Dragon', 'HBO')]
+    c.executemany("INSERT INTO titles VALUES (?,?,?)", t_data)
 
-    # 2. Populate Relational Data (Ensuring every region has data)
+    # SEED TRANSACTIONAL DATA (Ensuring data for ALL regions)
     regions = ["NA", "APAC", "EMEA", "LATAM"]
-    
-    # Generate 100 Deals
-    for i in range(1, 101):
-        v_id = random.randint(1, 4)
-        reg = random.choice(regions)
-        c.execute("INSERT INTO deals (vendor_id, deal_name, deal_value, region, status) VALUES (?,?,?,?,?)",
-                  (v_id, f"Package Deal {i}", random.uniform(500000, 5000000), reg, "Active"))
+    for reg in regions:
+        # 25 Deals per region
+        for i in range(25):
+            v_id = random.randint(1, 4)
+            c.execute("INSERT INTO deals (vendor_id, deal_name, deal_value, region, status) VALUES (?,?,?,?,?)",
+                      (v_id, f"{reg} Deal {i}", random.uniform(500000, 5000000), reg, "Active"))
+        
+        # 50 Work Orders per region
+        for i in range(50):
+            v_id = random.randint(1, 4)
+            t_id = random.choice([101, 102, 103, 104])
+            status = random.choice(["Delayed", "Completed", "In Progress"])
+            c.execute("INSERT INTO work_orders (title_id, vendor_id, status, region, due_date) VALUES (?,?,?,?,?)",
+                      (t_id, v_id, status, reg, "2024-12-01"))
 
-    # Generate 200 Work Orders
-    for i in range(1, 201):
-        v_id = random.randint(1, 4)
-        t_id = random.choice([101, 102, 103, 104])
-        reg = random.choice(regions)
-        status = random.choice(["Delayed", "Completed", "In Progress"])
-        c.execute("INSERT INTO work_orders (title_id, vendor_id, status, region, due_date) VALUES (?,?,?,?,?,?)",
-                  (t_id, v_id, status, reg, "2024-12-01"))
-
-    # Generate Planning Data
-    for t_id in [101, 102, 103, 104]:
-        for reg in regions:
+        # Content Planning
+        for t_id in [101, 102, 103, 104]:
             c.execute("INSERT INTO content_planning (title_id, status, region) VALUES (?,?,?)",
                       (t_id, random.choice(["Ready", "Not Ready"]), reg))
 
