@@ -5,7 +5,7 @@ import streamlit.components.v1 as components
 import time
 from utils.database import init_database, execute_sql
 from utils.query_parser import parse_query
-from utils.tableau_sync import trigger_tableau_report  # NEW IMPORT
+from utils.tableau_sync import trigger_tableau_report 
 
 st.set_page_config(page_title="Foundry Vantage", page_icon="🎥", layout="wide")
 
@@ -22,6 +22,7 @@ if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 
 def sync_region_from_query(query_text):
+    """Force override global region state if mentioned in search."""
     regions = ["NA", "APAC", "EMEA", "LATAM"]
     for r in regions:
         if r in query_text.upper():
@@ -33,6 +34,7 @@ def sync_region_from_query(query_text):
 user_input = st.chat_input("Ask about deals, vendors, or work orders...")
 active_q = st.session_state.get('active_query') or user_input
 
+# Sync region BEFORE the sidebar or charts are drawn
 if active_q:
     sync_region_from_query(active_q)
 
@@ -74,6 +76,7 @@ with st.sidebar:
 # --- 4. MAIN INTERFACE ---
 st.title(f"🔍 {persona} Intelligence: {st.session_state.current_region}")
 
+# Render History
 for i, msg in enumerate(st.session_state.chat_history):
     with st.chat_message("user"):
         st.write(msg["q"])
@@ -91,6 +94,7 @@ if active_q:
     chart_df, db_err = execute_sql(sql, DB_CONN)
 
     if chart_df is not None and not chart_df.empty:
+        # Table mapping for detailed records
         target_table = "deals"
         low_q = active_q.lower()
         if any(x in low_q for x in ["task", "order", "performance", "delay"]):
@@ -104,6 +108,7 @@ if active_q:
         with st.chat_message("assistant"):
             label, val = chart_df.columns[0], chart_df.columns[1] if len(chart_df.columns) > 1 else chart_df.columns[0]
             
+            # --- VIZ RENDERING ---
             if c_type == "pie":
                 fig = px.pie(chart_df, names=label, values=val, hole=0.5,
                              color_discrete_sequence=px.colors.qualitative.Prism,
@@ -125,22 +130,48 @@ if active_q:
             st.plotly_chart(fig, use_container_width=True, key=f"new_{time.time()}")
             
             # --- ENTERPRISE TABLEAU ACTIONS ---
-            with st.expander("🚀 Enterprise Actions", expanded=False):
+            with st.expander("🚀 Enterprise Actions", expanded=True):
                 col1, col2 = st.columns([2, 1])
                 with col1:
-                    rep_name = st.text_input("Tableau Report Name", value=f"Foundry_{st.session_state.current_region}_{persona}")
+                    rep_name = st.text_input("Tableau Report Name", 
+                                            value=f"Foundry_{st.session_state.current_region}_{persona}",
+                                            key="tableau_rep_input")
                 with col2:
-                    st.write(" ") # spacer
-                    if st.button("Sync to Tableau", use_container_width=True):
-                        with st.spinner("Pushing to Tableau..."):
+                    st.write(" ") # alignment spacer
+                    if st.button("Sync to Tableau", use_container_width=True, key="sync_btn"):
+                        with st.spinner("Connecting to Tableau..."):
                             success, msg = trigger_tableau_report(full_df, rep_name)
-                            if success: st.success(msg)
-                            else: st.error(msg)
+                            if success:
+                                st.success(msg)
+                                st.balloons()
+                            else:
+                                st.error(msg)
             
-            with st.expander("Explore Full Transactional Records", expanded=True):
+            # --- DETAILED RECORDS ---
+            with st.expander("Explore Full Transactional Records", expanded=False):
                 st.dataframe(full_df, use_container_width=True)
-                st.download_button("📥 Download CSV", data=full_df.to_csv(index=False), file_name="report.csv")
+                st.download_button("📥 Download CSV", 
+                                   data=full_df.to_csv(index=False), 
+                                   file_name="report.csv",
+                                   key=f"dl_{time.time()}")
 
+            # --- SESSION HISTORY & SCROLL ---
             st.session_state.chat_history.append({"q": active_q, "fig": fig, "full_df": full_df})
-            components.html("<script>window.parent.document.querySelector('section.main').scrollTo(0,10000);</script>", height=0)
+            
+            # Robust Scroll Script
+            components.html(
+                f"""
+                <script>
+                    var mainBlock = window.parent.document.querySelector('section.main');
+                    if (mainBlock) {{
+                        mainBlock.scrollTo({{ top: mainBlock.scrollHeight, behavior: 'smooth' }});
+                    }}
+                </script>
+                """,
+                height=0
+            )
+            
+            time.sleep(0.1) # Small delay for JS to fire
             st.rerun()
+    else:
+        st.error(f"No records found for '{active_q}' in {st.session_state.current_region}.")
