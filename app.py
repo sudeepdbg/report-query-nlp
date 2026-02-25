@@ -14,76 +14,87 @@ def get_db():
     return init_database()
 DB_CONN = get_db()
 
+# --- 1. STATE MANAGEMENT ---
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 
-# --- 1. SIDEBAR (Master Filter) ---
+# Callback function to force clean state when sidebar changes
+def on_sidebar_change():
+    st.session_state.chat_history = []  # Optional: Clear history to avoid region mixing
+    # No need to do more, Streamlit reruns automatically
+
+# --- 2. SIDEBAR (The Master Source) ---
 with st.sidebar:
     st.title("🎥 Foundry Vantage")
-    st.caption("v6.0 Enterprise Ready")
+    st.caption("v6.2 Stable Enterprise")
     
-    # Selection directly updates session_state
-    region = st.selectbox("Market Region", ["APAC", "EMEA", "NA", "LATAM"], key="sb_region")
-    persona = st.selectbox("View Persona", ["Leadership", "Product", "Operations", "Finance"], key="sb_persona")
+    # Use on_change to ensure the app acknowledges the new filter immediately
+    region = st.selectbox("Market Region", ["APAC", "EMEA", "NA", "LATAM"], 
+                          key="sb_region", on_change=on_sidebar_change)
+    persona = st.selectbox("View Persona", ["Leadership", "Product", "Operations", "Finance"], 
+                           key="sb_persona")
     
     st.divider()
-    if st.button("Clear Chat", width="stretch"):
+    if st.button("🗑️ Clear All", width="stretch"):
         st.session_state.chat_history = []
         st.rerun()
 
-# --- 2. EXECUTION ---
-chat_input = st.chat_input("Ask about deals, vendors, or work orders...")
+# --- 3. EXECUTION ENGINE ---
+user_input = st.chat_input("Ask about deals, vendors, or work orders...")
 
-if chat_input:
-    # Use the SIDEBAR region for the parser
-    sql, _, c_type = parse_query(chat_input, st.session_state.sb_region)
+# If the user clicks a suggestion or types a query
+if user_input:
+    # IMPORTANT: We use st.session_state.sb_region to guarantee the filter is fresh
+    current_region = st.session_state.sb_region
+    
+    sql, _, c_type = parse_query(user_input, current_region)
     chart_df, _ = execute_sql(sql, DB_CONN)
 
     if chart_df is not None and not chart_df.empty:
-        # Determine target table
-        target = "work_orders" if "performance" in chat_input.lower() else "deals"
-        full_sql = f"SELECT * FROM {target} WHERE UPPER(region) = '{st.session_state.sb_region.upper()}'"
+        # Determine target table for Tableau data
+        target = "work_orders" if "performance" in user_input.lower() else "deals"
+        full_sql = f"SELECT * FROM {target} WHERE UPPER(region) = '{current_region.upper()}'"
         full_df, _ = execute_sql(full_sql, DB_CONN)
 
-        # Plot
+        # Plotly Logic
         if c_type == "pie":
             fig = px.pie(chart_df, names=chart_df.columns[0], values=chart_df.columns[1], hole=0.5)
         else:
             fig = px.bar(chart_df, y=chart_df.columns[0], x=chart_df.columns[1], orientation='h')
         
-        # Save
+        # Save unique record
         st.session_state.chat_history.append({
-            "query": chat_input,
+            "query": user_input,
             "fig": fig,
             "full_df": full_df,
-            "region": st.session_state.sb_region,
+            "region": current_region,
             "id": time.time()
         })
 
-# --- 3. DISPLAY FEED ---
+# --- 4. RENDER UI ---
 st.title(f"🔍 {st.session_state.sb_persona} Intelligence: {st.session_state.sb_region}")
 
 for i, entry in enumerate(st.session_state.chat_history):
     with st.chat_message("user"):
-        st.write(entry["query"])
+        st.write(f"**{entry['query']}** (Region: {entry['region']})")
     
     with st.chat_message("assistant"):
-        st.plotly_chart(entry["fig"], width="stretch", key=f"plot_{entry['id']}")
+        st.plotly_chart(entry["fig"], width="stretch", key=f"p_{entry['id']}")
         
+        # Enterprise Actions
         st.markdown("### 📊 Enterprise Actions")
         c1, c2 = st.columns([3, 1])
-        t_name = c1.text_input("Report Name", value=f"Report_{i}", key=f"in_{entry['id']}")
-        if c2.button("🚀 Push to Tableau", key=f"pb_{entry['id']}", width="stretch"):
-            with st.spinner("Pushing..."):
-                success, msg = trigger_tableau_report(entry["full_df"], t_name)
-                if success: st.success(msg)
-                else: st.error(msg)
+        t_name = c1.text_input("Tableau Name", value=f"Report_{entry['region']}_{i}", key=f"in_{entry['id']}")
         
-        with st.expander("📝 View Records"):
-            st.dataframe(entry["full_df"], width="stretch")
+        if c2.button("🚀 Push to Tableau", key=f"btn_{entry['id']}", width="stretch"):
+            with st.spinner("Pushing to Cloud..."):
+                # Pass a COPY of the dataframe to avoid pointer errors
+                success, msg = trigger_tableau_report(entry["full_df"].copy(), t_name)
+                if success: st.success("Pushed Successfully!")
+                else: st.error(f"Tableau Error: {msg}")
 
-# --- 4. SCROLL FIX ---
-if chat_input:
+# --- 5. SCROLL ---
+if user_input:
     components.html(
         f"""<script>
         var main = window.parent.document.querySelector('section.main');
