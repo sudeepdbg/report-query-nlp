@@ -23,6 +23,7 @@ if 'current_region' not in st.session_state:
 # 2. SIDEBAR
 with st.sidebar:
     st.title("🎥 Foundry Vantage")
+    st.caption("v4.0 Final Stable")
     st.divider()
     
     st.session_state.current_region = st.selectbox(
@@ -43,21 +44,23 @@ with st.sidebar:
     }
     
     for i, sug in enumerate(prompts.get(persona, [])):
-        if st.button(sug, use_container_width=True, key=f"sug_{persona}_{i}"):
+        # Sidebar buttons use the persona and market in the key to prevent ID collisions
+        if st.button(sug, use_container_width=True, key=f"sug_{persona}_{i}_{st.session_state.current_region}"):
             st.session_state.active_query = sug
             st.rerun()
 
 # 3. MAIN INTERFACE
 st.title(f"🔍 {persona} Intelligence")
 
-# Render History (Includes restored Dataframe and Download)
+# Render History
 for i, msg in enumerate(st.session_state.chat_history):
     with st.chat_message("user"):
         st.write(msg["q"])
     with st.chat_message("assistant"):
         st.plotly_chart(msg["fig"], use_container_width=True, key=f"hist_fig_{i}")
-        with st.expander("View Records"):
-            st.dataframe(msg["df"], use_container_width=True)
+        # Restored the rich multi-field view in history
+        with st.expander("View Detailed Records"):
+            st.dataframe(msg["full_df"], use_container_width=True)
 
 # 4. PROCESS NEW QUERY
 user_input = st.chat_input("Ask about deals, vendors, or work orders...")
@@ -67,42 +70,56 @@ if query_to_run:
     if 'active_query' in st.session_state:
         del st.session_state.active_query
         
+    # Step A: Get Aggregated Data for the Chart
     sql, err, c_type = parse_query(query_to_run, st.session_state.current_region)
-    res_df, db_err = execute_sql(sql, DB_CONN)
+    chart_df, db_err = execute_sql(sql, DB_CONN)
 
-    if res_df is not None and not res_df.empty:
+    if chart_df is not None and not chart_df.empty:
+        # Step B: FETCH FULL TRANSACTIONAL DATA (restores the multi-field table)
+        # Identify source table based on query content
+        target_table = "deals"
+        low_q = query_to_run.lower()
+        if any(x in low_q for x in ["task", "order", "performance", "delay"]):
+            target_table = "work_orders"
+        elif any(x in low_q for x in ["ready", "inventory", "status"]):
+            target_table = "content_planning"
+
+        full_sql = f"SELECT * FROM {target_table} WHERE UPPER(region) = '{st.session_state.current_region.upper()}'"
+        full_df, _ = execute_sql(full_sql, DB_CONN)
+
         with st.chat_message("assistant"):
-            # Metric logic for financials
-            if any(col in res_df.columns for col in ["total_value", "deal_value"]):
-                val_col = "total_value" if "total_value" in res_df.columns else "deal_value"
-                st.metric("Total Impact", f"${res_df[val_col].sum():,.0f}")
+            # Metric logic
+            if any(col in chart_df.columns for col in ["total_value", "deal_value"]):
+                val_col = "total_value" if "total_value" in chart_df.columns else "deal_value"
+                st.metric("Total Financial Impact", f"${chart_df[val_col].sum():,.0f}")
             
             # Chart Rendering
-            label_col, val_col = res_df.columns[0], res_df.columns[1] if len(res_df.columns) > 1 else res_df.columns[0]
+            label_col, val_col = chart_df.columns[0], chart_df.columns[1] if len(chart_df.columns) > 1 else chart_df.columns[0]
             if c_type == "pie":
-                fig = px.pie(res_df, names=label_col, values=val_col, hole=0.4)
+                fig = px.pie(chart_df, names=label_col, values=val_col, hole=0.4)
             else:
-                fig = px.bar(res_df, x=label_col, y=val_col, color=label_col, template="plotly_white")
+                fig = px.bar(chart_df, x=label_col, y=val_col, color=label_col, template="plotly_white")
             
+            # Fix: timestamp key prevents DuplicateElementId
             st.plotly_chart(fig, use_container_width=True, key=f"new_{time.time()}")
             
-            # --- RESTORED TABULAR FEATURES ---
+            # --- RESTORED RICH TABULAR FEATURES ---
             st.subheader("Data Exploration")
-            # 1. Tabular View with column selection/filtering
-            st.dataframe(res_df, use_container_width=True)
+            # This shows the full multi-column table (date, scope, status, etc.)
+            st.dataframe(full_df, use_container_width=True)
             
-            # 2. Download Option
-            csv = res_df.to_csv(index=False).encode('utf-8')
+            # Download full dataset
+            csv = full_df.to_csv(index=False).encode('utf-8')
             st.download_button(
-                label="📥 Download Data as CSV",
+                label="📥 Download Full Report (CSV)",
                 data=csv,
-                file_name=f"{query_to_run.replace(' ', '_')}.csv",
+                file_name=f"{target_table}_detailed_report.csv",
                 mime='text/csv',
                 key=f"dl_{time.time()}"
             )
             
-            # Save to history including the dataframe
-            st.session_state.chat_history.append({"q": query_to_run, "fig": fig, "df": res_df})
+            # Save to history including the RICH dataframe
+            st.session_state.chat_history.append({"q": query_to_run, "fig": fig, "full_df": full_df})
             
             # Scroll Fix
             components.html("<script>window.parent.document.querySelector('section.main').scrollTo(0,10000);</script>", height=0)
