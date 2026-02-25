@@ -2,67 +2,62 @@ import re
 
 def parse_query(question, region):
     """
-    Enhanced Enterprise Parser:
-    - Auto-Region Detection: Prioritizes query text over sidebar state.
-    - Pie/Donut: Status & Distributional data.
-    - Treemap: Hierarchical Market Value.
-    - Vertical Bar: High-cost individual items.
-    - Horizontal Bar: Vendor rankings & Operational performance.
+    Hardened Parser v3. 
+    Added plural support and more aggressive keyword matching to prevent 'No records found'.
     """
     q = question.lower().strip()
+    # Normalize region to match DB storage (e.g., 'apac' becomes 'APAC')
+    active_reg = region.upper()
     
-    # --- 1. REGION DETECTION (Overrides sidebar if found in query) ---
-    reg = region.upper()
-    potential_regions = ["NA", "APAC", "EMEA", "LATAM"]
-    for r in potential_regions:
-        if r.lower() in q:
-            reg = r
-            break
-
-    # --- 2. PIE/DONUT: Composition & Status ---
-    if any(k in q for k in ["status", "ready", "rights", "svod", "inventory", "distribution", "breakdown"]):
-        if "rights" in q or "svod" in q:
-            sql = f"SELECT rights_scope, COUNT(*) as count FROM deals WHERE UPPER(region) = '{reg}' GROUP BY rights_scope"
-        else:
-            sql = f"SELECT status, COUNT(*) as count FROM content_planning WHERE UPPER(region) = '{reg}' GROUP BY status"
-        return sql.strip(), None, "pie"
-
-    # --- 3. TREEMAP: Market Value (Hierarchical) ---
-    if "market value" in q:
-        sql = f"SELECT vendor_name, deal_name, deal_value FROM deals WHERE UPPER(region) = '{reg}'"
-        return sql.strip(), None, "treemap"
-
-    # --- 4. VERTICAL BAR: Individual "Top" Items ---
-    # Used for specific deal names where horizontal bars would have too-long labels
-    if any(k in q for k in ["highest cost", "costliest", "top deals", "expensive"]):
-        sql = f"""
-            SELECT deal_name, deal_value 
-            FROM deals 
-            WHERE UPPER(region) = '{reg}' 
-            ORDER BY deal_value DESC LIMIT 10
-        """
-        return sql.strip(), None, "bar_v"
-
-    # --- 5. HORIZONTAL BAR: Professional Rankings ---
-    # Preferred for Vendor and Performance comparisons
-    if any(k in q for k in ["vendor", "spend", "cost", "performance", "top", "task", "order", "delay"]):
-        if any(k in q for k in ["task", "order", "delay"]):
-            status_filter = "AND UPPER(status) = 'DELAYED'" if "delay" in q else ""
-            sql = f"""
-                SELECT vendor_name, COUNT(*) as total_count 
-                FROM work_orders 
-                WHERE UPPER(region) = '{reg}' {status_filter}
-                GROUP BY vendor_name ORDER BY total_count ASC
-            """
-        else:
-            # Aggregate spend by vendor
+    # 1. INTENT: VENDORS & SPEND
+    # Catching 'vendors' (plural), 'spend', 'top', etc.
+    vendor_keywords = ["vendor", "vendors", "spend", "cost", "rank", "who", "top", "studio", "studios"]
+    if any(word in q for word in vendor_keywords):
+        
+        # Aggregation Logic: For "Top", "Total", "Who is the biggest", etc.
+        if any(word in q for word in ["top", "total", "sum", "who", "spend", "biggest", "highest"]):
             sql = f"""
                 SELECT vendor_name, SUM(deal_value) as total_value 
                 FROM deals 
-                WHERE UPPER(region) = '{reg}' 
-                GROUP BY vendor_name ORDER BY total_value ASC
+                WHERE UPPER(region) = '{active_reg}' 
+                GROUP BY vendor_name 
+                ORDER BY total_value DESC
             """
-        return sql.strip(), None, "bar_h"
+            return sql.strip() + ";", None, "bar"
+        
+        # List View for Vendors: Ensure it pulls vendor_name specifically
+        return f"SELECT vendor_name, deal_name, deal_value, status FROM deals WHERE UPPER(region) = '{active_reg}';", None, "bar"
 
-    # --- 6. FALLBACK ---
-    return f"SELECT vendor_name, SUM(deal_value) as total_value FROM deals WHERE UPPER(region) = '{reg}' GROUP BY vendor_name ORDER BY total_value DESC LIMIT 10", None, "bar_h"
+    # 2. INTENT: RIGHTS & DEALS
+    # Expanded keywords for SVOD, AVOD, TVOD, etc.
+    rights_keywords = ["rights", "svod", "avod", "tvod", "exclusive", "deal", "deals", "breakdown", "scope", "territory"]
+    if any(word in q for word in rights_keywords):
+        if any(word in q for word in ["breakdown", "scope", "distribution", "count"]):
+            sql = f"""
+                SELECT rights_scope, COUNT(*) as count 
+                FROM deals 
+                WHERE UPPER(region) = '{active_reg}' 
+                GROUP BY rights_scope
+            """
+            return sql.strip() + ";", None, "bar"
+            
+        return f"SELECT * FROM deals WHERE UPPER(region) = '{active_reg}' ORDER BY deal_value DESC;", None, "bar"
+
+    # 3. INTENT: OPERATIONS & WORK ORDERS
+    # Matches 'orders' plural and 'tasks' plural
+    ops_keywords = ["order", "orders", "task", "tasks", "duplo", "delay", "delayed", "queue", "work"]
+    if any(word in q for word in ops_keywords):
+        return f"SELECT * FROM work_orders WHERE UPPER(region) = '{active_reg}' ORDER BY due_date ASC;", None, "pie"
+
+    # 4. INTENT: CONTENT & INVENTORY
+    # Matches 'titles' and 'status'
+    content_keywords = ["content", "ready", "unacquired", "inventory", "max", "title", "titles", "planning"]
+    if any(word in q for word in content_keywords):
+        if any(word in q for word in ["ready", "status", "readiness"]):
+            return f"SELECT status, COUNT(*) as count FROM content_planning WHERE UPPER(region) = '{active_reg}' GROUP BY status;", None, "pie"
+            
+        return f"SELECT * FROM content_planning WHERE UPPER(region) = '{active_reg}' LIMIT 50;", None, "pie"
+
+    # 5. ERROR FALLBACK
+    # Returning None triggers the 'Suggestion Engine' in your app.py
+    return None, None, None
