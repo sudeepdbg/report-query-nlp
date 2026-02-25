@@ -1,6 +1,7 @@
 import sqlite3
 import pandas as pd
 import random
+from datetime import datetime, timedelta
 
 def get_db_connection():
     conn = sqlite3.connect(':memory:', check_same_thread=False)
@@ -11,28 +12,32 @@ def init_database():
     conn = get_db_connection()
     c = conn.cursor()
 
-    # 1. Master Tables
+    # 1. Schema Definition with Full Transactional Fields
     c.execute('CREATE TABLE vendors (vendor_id INTEGER PRIMARY KEY, vendor_name TEXT, rating REAL)')
     
-    # 2. Transactional Tables (Denormalized vendor_name to prevent JOIN failures)
+    # Added fields: deal_date, rights_scope, deal_type to match your high-detail screenshots
     c.execute('''CREATE TABLE deals (
         id INTEGER PRIMARY KEY, 
         vendor_id INTEGER, 
         vendor_name TEXT, 
         deal_name TEXT, 
         deal_value REAL, 
+        deal_date TEXT,
         region TEXT, 
         rights_scope TEXT, 
+        deal_type TEXT,
         status TEXT)''')
         
     c.execute('''CREATE TABLE work_orders (
         id INTEGER PRIMARY KEY, 
         title_id INTEGER, 
+        title_name TEXT,
         vendor_id INTEGER, 
         vendor_name TEXT,
         status TEXT, 
         region TEXT, 
-        due_date TEXT)''')
+        due_date TEXT,
+        priority TEXT)''')
         
     c.execute('''CREATE TABLE content_planning (
         id INTEGER PRIMARY KEY, 
@@ -40,9 +45,10 @@ def init_database():
         content_title TEXT,
         status TEXT, 
         region TEXT,
-        localization_status TEXT)''')
+        localization_status TEXT,
+        delivery_method TEXT)''')
 
-    # 3. Master Data Seeding
+    # 2. Master Data
     v_map = {1: 'PixelPerfect', 2: 'GlobalDub', 3: 'StreamOps', 4: 'VisionPost'}
     v_data = [(i, name, round(random.uniform(3.5, 5.0), 1)) for i, name in v_map.items()]
     c.executemany("INSERT INTO vendors VALUES (?,?,?)", v_data)
@@ -54,49 +60,38 @@ def init_database():
         (104, 'House of the Dragon', 'HBO')
     ]
 
-    # 4. Dense Data Seeding (Guarantees every region has results)
+    # 3. Seed Dense Data
     regions = ["NA", "APAC", "EMEA", "LATAM"]
-    rights_options = ["SVOD", "AVOD", "TVOD", "Linear", "All Rights"]
+    rights_options = ["Global", "Multi-Region", "Territory Specific"]
+    deal_types = ["Library Buy", "Volume Deal", "Output Deal"]
     
     for reg in regions:
-        # Seed 50 Deals per region
+        # Seed Deals with multi-column richness
         for i in range(50):
             v_id = random.randint(1, 4)
-            v_name = v_map[v_id]
-            # Ensure names and regions are saved in UPPERCASE to match the parser's logic
+            # Generate random date in 2024-2025
+            d_date = (datetime(2024, 1, 1) + timedelta(days=random.randint(0, 400))).strftime('%Y-%m-%d')
             c.execute("""INSERT INTO deals 
-                (vendor_id, vendor_name, deal_name, deal_value, region, rights_scope, status) 
-                VALUES (?,?,?,?,?,?,?)""",
-                (v_id, v_name, f"Package {i+100}", random.uniform(500000, 5000000), 
-                 reg, random.choice(rights_options), "Active"))
+                (vendor_id, vendor_name, deal_name, deal_value, deal_date, region, rights_scope, deal_type, status) 
+                VALUES (?,?,?,?,?,?,?,?,?)""",
+                (v_id, v_map[v_id], f"Package Deal {i+1}", random.uniform(500000, 5000000), 
+                 d_date, reg, random.choice(rights_options), random.choice(deal_types), "Active"))
         
-        # Seed 40 Work Orders (Force 'Delayed' status for reliability)
-        for i in range(40):
-            v_id = random.randint(1, 4)
-            v_name = v_map[v_id]
+        # Seed Work Orders
+        for i in range(30):
             t_id, t_name, _ = random.choice(titles)
-            # Guarantee at least some delayed tasks for the 'Delayed' query
-            status = "Delayed" if i % 4 == 0 else "Completed"
             c.execute("""INSERT INTO work_orders 
-                (title_id, vendor_id, vendor_name, status, region, due_date) 
-                VALUES (?,?,?,?,?,?)""",
-                (t_id, v_id, v_name, status, reg, "2024-12-01"))
-
-        # Seed Content Planning
-        for t_id, t_name, _ in titles:
-            c.execute("""INSERT INTO content_planning 
-                (title_id, content_title, status, region, localization_status) 
-                VALUES (?,?,?,?,?)""",
-                (t_id, t_name, random.choice(["Ready", "Not Ready"]), reg, "In-Progress"))
+                (title_id, title_name, vendor_id, vendor_name, status, region, due_date, priority) 
+                VALUES (?,?,?,?,?,?,?,?)""",
+                (t_id, t_name, random.randint(1,4), v_map[random.randint(1,4)], 
+                 random.choice(["Completed", "Delayed", "In Progress"]), reg, "2024-12-01", "High"))
 
     conn.commit()
     return conn
 
 def execute_sql(sql, conn):
     try:
-        # Clean the SQL string from any potential parser artifacts
-        clean_sql = sql.strip().replace('\n', ' ')
-        df = pd.read_sql_query(clean_sql, conn)
+        df = pd.read_sql_query(sql.strip().rstrip(';'), conn)
         return df, None
     except Exception as e:
         return None, str(e)
