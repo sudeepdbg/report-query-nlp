@@ -20,7 +20,7 @@ if 'chat_history' not in st.session_state:
 if 'current_region' not in st.session_state:
     st.session_state.current_region = 'APAC'
 if 'persona' not in st.session_state:
-    st.session_state.persona = 'Product'
+    st.session_state.persona = 'Leadership'
 
 # 2. PRE-RENDER LOGIC
 user_input = st.chat_input("Ask about deals, vendors, or work orders...")
@@ -32,13 +32,6 @@ if st.session_state.get('pending_prompt'):
 elif user_input:
     active_prompt = user_input
 
-# Auto-detect region to keep Sidebar and Query in sync
-if active_prompt:
-    for r in ["NA", "APAC", "EMEA", "LATAM"]:
-        if r.lower() in active_prompt.lower():
-            st.session_state.current_region = r
-            break
-
 # 3. SIDEBAR
 with st.sidebar:
     st.title("🎥 Foundry Vantage")
@@ -48,45 +41,44 @@ with st.sidebar:
     st.session_state.current_region = st.selectbox(
         "Market Region", 
         market_options,
-        index=market_options.index(st.session_state.current_region),
-        key=f"sb_reg_{st.session_state.current_region}"
+        index=market_options.index(st.session_state.current_region)
     )
 
     persona_options = ["Leadership", "Product", "Operations", "Finance"]
     st.session_state.persona = st.selectbox("View Persona", persona_options, index=persona_options.index(st.session_state.persona))
 
     st.divider()
-    st.subheader(f"💡 {st.session_state.persona} Queries")
+    st.subheader(f"💡 {st.session_state.persona} Suggestions")
+    
     def get_persona_suggestions(persona, reg):
         prompts = {
-            "Leadership": [f"Top vendors in {reg}", f"Market value overview for {reg}"],
-            "Product": [f"Show SVOD rights in {reg}", f"Rights scope breakdown {reg}"],
-            "Operations": [f"Work order status {reg}", f"Delayed tasks {reg}"],
-            "Finance": [f"Total spend per vendor in {reg}", f"Highest cost deals {reg}"]
+            "Leadership": [f"Top vendors in {reg}", f"Market value overview for {reg}", f"Vendor performance {reg}"],
+            "Product": [f"Show SVOD rights in {reg}", f"Rights scope breakdown {reg}", f"Content readiness {reg}"],
+            "Operations": [f"Work order status {reg}", f"Delayed tasks {reg}", f"Duplo queue status {reg}"],
+            "Finance": [f"Total spend per vendor in {reg}", f"Highest cost deals {reg}", f"SVOD spend breakdown {reg}"]
         }
-        return prompts.get(persona, prompts["Product"])
+        return prompts.get(persona, prompts["Leadership"])
 
     for i, sug in enumerate(get_persona_suggestions(st.session_state.persona, st.session_state.current_region)):
-        if st.button(sug, width='stretch', key=f"sug_btn_{i}"):
+        if st.button(sug, use_container_width=True, key=f"sug_btn_{i}"):
             st.session_state.pending_prompt = sug
             st.rerun()
 
-# 4. RENDER HISTORY
+# 4. RENDER INTERFACE
 st.title(f"🔍 {st.session_state.persona} Insights")
 
+# Render History
 for i, msg in enumerate(st.session_state.chat_history):
     with st.chat_message("user"):
         st.write(msg["question"])
     with st.chat_message("assistant", avatar="🎥"):
-        st.write(msg["answer"])
         if msg.get("metrics"):
             m1, m2 = st.columns(2)
             m1.metric(msg["metrics"][0]["label"], msg["metrics"][0]["value"])
             m2.metric(msg["metrics"][1]["label"], msg["metrics"][1]["value"])
-        if msg["chart"]:
-            st.plotly_chart(msg["chart"], use_container_width=True, key=f"hist_chart_{i}")
+        st.plotly_chart(msg["chart"], use_container_width=True, key=f"hist_chart_{i}")
         with st.expander("View Records"):
-            st.dataframe(msg["data"], use_container_width=True, key=f"hist_df_{i}")
+            st.dataframe(msg["data"], use_container_width=True)
 
 # 5. PROCESS NEW QUERY
 if active_prompt:
@@ -95,57 +87,41 @@ if active_prompt:
         
     with st.chat_message("assistant", avatar="🎥"):
         active_reg = st.session_state.current_region
+        sql, error, chart_type = parse_query(active_prompt, active_reg)
         
-        with st.spinner(f"Querying {active_reg}..."):
-            sql, error, chart_type = parse_query(active_prompt, active_reg)
+        if sql:
+            res_df, _ = execute_sql(sql, DB_CONN)
             
-            if error:
-                st.error(error)
-            else:
-                res_df, db_err = execute_sql(sql, DB_CONN)
+            if res_df is not None and not res_df.empty:
+                x_col = res_df.columns[0]
+                y_col = res_df.columns[1] if len(res_df.columns) > 1 else res_df.columns[0]
                 
-                if res_df is not None and not res_df.empty:
-                    # FIX: Flexible Column Mapping for Vendor results
-                    # If it's a 'Top Vendor' query, columns are [vendor_name, total_value]
-                    x_col = res_df.columns[0]
-                    y_col = res_df.columns[1] if len(res_df.columns) > 1 else res_df.columns[0]
-                    
-                    if chart_type == "pie":
-                        fig = px.pie(res_df, names=x_col, title=f"Inventory: {active_reg}", hole=0.4)
-                    else:
-                        fig = px.bar(res_df, x=x_col, y=y_col, title=f"Analysis: {active_reg}", color=x_col)
-
-                    # Dynamic Metrics for Leadership/Finance
-                    metrics_data = None
-                    if any(col in res_df.columns for col in ["deal_value", "total_value"]):
-                        val_col = "deal_value" if "deal_value" in res_df.columns else "total_value"
-                        m1, m2 = st.columns(2)
-                        v_sum = f"${res_df[val_col].sum():,.0f}"
-                        v_avg = f"${res_df[val_col].mean():,.0f}"
-                        m1.metric("Total Value", v_sum)
-                        m2.metric("Average Value", v_avg)
-                        metrics_data = [{"label": "Total Value", "value": v_sum}, {"label": "Average Value", "value": v_avg}]
-                    
-                    st.plotly_chart(fig, use_container_width=True, key=f"new_chart_{time.time()}")
-                    
-                    with st.expander("Explore Dataset", expanded=False):
-                        st.dataframe(res_df, use_container_width=True)
-
-                    # Save to History
-                    st.session_state.chat_history.append({
-                        "question": active_prompt, "answer": f"Displaying {active_reg} Data:",
-                        "data": res_df, "chart": fig, "metrics": metrics_data
-                    })
-                    
-                    # SCROLL FIX
-                    components.html(
-                        f"""
-                        <script>
-                        var main = window.parent.document.querySelector('section.main');
-                        main.scrollTo({{ top: main.scrollHeight, behavior: 'smooth' }});
-                        </script>
-                        """, height=0
-                    )
-                    st.rerun()
+                if chart_type == "pie":
+                    fig = px.pie(res_df, names=x_col, values=y_col if x_col != y_col else None, title=f"Distribution: {active_reg}", hole=0.4)
                 else:
-                    st.warning(f"No records found for '{active_prompt}' in {active_reg}.")
+                    fig = px.bar(res_df, x=x_col, y=y_col, title=f"Analysis: {active_reg}", color=x_col)
+
+                # Metrics logic
+                metrics_data = None
+                if "total_value" in res_df.columns or "deal_value" in res_df.columns:
+                    val_col = "total_value" if "total_value" in res_df.columns else "deal_value"
+                    v_sum = f"${res_df[val_col].sum():,.0f}"
+                    v_avg = f"${res_df[val_col].mean():,.0f}"
+                    m1, m2 = st.columns(2)
+                    m1.metric("Total Value", v_sum)
+                    m2.metric("Average Value", v_avg)
+                    metrics_data = [{"label": "Total Value", "value": v_sum}, {"label": "Average Value", "value": v_avg}]
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                st.session_state.chat_history.append({
+                    "question": active_prompt, "data": res_df, "chart": fig, "metrics": metrics_data
+                })
+                
+                # Auto Scroll
+                components.html("<script>window.parent.document.querySelector('section.main').scrollTo(0, 10000);</script>", height=0)
+                st.rerun()
+            else:
+                st.warning(f"No records found for '{active_prompt}' in {active_reg}. Check if data exists for this specific filter.")
+        else:
+            st.error("I couldn't parse that request. Try using keywords like 'Top vendors', 'Spend', or 'Ready status'.")
