@@ -8,86 +8,144 @@ from utils.query_parser import parse_query
 
 st.set_page_config(page_title="Foundry Vantage", page_icon="🎥", layout="wide")
 
-# PM Feature: Custom Styling for the "Vantage" look
-st.markdown("""<style>
-    .metric-card { background-color: #f0f2f6; padding: 15px; border-radius: 10px; border-left: 5px solid #ff4b4b; }
-    .stChatFloatingInputContainer { bottom: 20px; }
-</style>""", unsafe_allow_html=True)
-
 @st.cache_resource
-def get_db(): return init_database()
+def get_db():
+    return init_database()
+
 DB_CONN = get_db()
 
-if 'chat_history' not in st.session_state: st.session_state.chat_history = []
-if 'current_region' not in st.session_state: st.session_state.current_region = 'APAC'
+# 1. Initialize Session States
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+if 'current_region' not in st.session_state:
+    st.session_state.current_region = 'APAC'
+if 'persona' not in st.session_state:
+    st.session_state.persona = 'Product'
 
-# 1. SIDEBAR: The Control Center
+# 2. PRE-RENDER LOGIC
+user_input = st.chat_input("Ask about deals, vendors, or work orders...")
+
+active_prompt = None
+if st.session_state.get('pending_prompt'):
+    active_prompt = st.session_state.pending_prompt
+    del st.session_state.pending_prompt
+elif user_input:
+    active_prompt = user_input
+
+# Auto-detect region to keep Sidebar and Query in sync
+if active_prompt:
+    for r in ["NA", "APAC", "EMEA", "LATAM"]:
+        if r.lower() in active_prompt.lower():
+            st.session_state.current_region = r
+            break
+
+# 3. SIDEBAR
 with st.sidebar:
     st.title("🎥 Foundry Vantage")
-    st.caption("v2.0 - Decision Intelligence")
     st.divider()
     
-    st.session_state.current_region = st.selectbox("Current Market Focus", ["NA", "APAC", "EMEA", "LATAM"])
-    persona = st.selectbox("Intelligence View", ["Leadership", "Product", "Operations", "Finance"])
+    market_options = ["NA", "APAC", "EMEA", "LATAM"]
+    st.session_state.current_region = st.selectbox(
+        "Market Region", 
+        market_options,
+        index=market_options.index(st.session_state.current_region),
+        key=f"sb_reg_{st.session_state.current_region}"
+    )
+
+    persona_options = ["Leadership", "Product", "Operations", "Finance"]
+    st.session_state.persona = st.selectbox("View Persona", persona_options, index=persona_options.index(st.session_state.persona))
 
     st.divider()
-    st.subheader(f"🚀 Quick Actions")
-    # PM Flow: Common patterns for the selected persona
-    suggestions = {
-        "Leadership": ["Global spend by vendor", "Top vendors in " + st.session_state.current_region],
-        "Product": ["Content readiness status", "Rights scope breakdown"],
-        "Finance": ["Total deal value summary", "Highest cost deals"]
-    }.get(persona, ["Show inventory"])
+    st.subheader(f"💡 {st.session_state.persona} Queries")
+    def get_persona_suggestions(persona, reg):
+        prompts = {
+            "Leadership": [f"Top vendors in {reg}", f"Market value overview for {reg}"],
+            "Product": [f"Show SVOD rights in {reg}", f"Rights scope breakdown {reg}"],
+            "Operations": [f"Work order status {reg}", f"Delayed tasks {reg}"],
+            "Finance": [f"Total spend per vendor in {reg}", f"Highest cost deals {reg}"]
+        }
+        return prompts.get(persona, prompts["Product"])
 
-    for sug in suggestions:
-        if st.button(sug, use_container_width=True):
+    for i, sug in enumerate(get_persona_suggestions(st.session_state.persona, st.session_state.current_region)):
+        if st.button(sug, width='stretch', key=f"sug_btn_{i}"):
             st.session_state.pending_prompt = sug
             st.rerun()
 
-# 2. INTERFACE
-st.title(f"🔍 {persona} Intelligence")
+# 4. RENDER HISTORY
+st.title(f"🔍 {st.session_state.persona} Insights")
 
-# 3. CHAT HISTORY RENDERER
 for i, msg in enumerate(st.session_state.chat_history):
-    with st.chat_message("user"): st.write(msg["question"])
+    with st.chat_message("user"):
+        st.write(msg["question"])
     with st.chat_message("assistant", avatar="🎥"):
         st.write(msg["answer"])
-        if msg["chart"]: st.plotly_chart(msg["chart"], use_container_width=True, key=f"h_{i}")
-        with st.expander("Raw Data"): st.dataframe(msg["data"], use_container_width=True)
+        if msg.get("metrics"):
+            m1, m2 = st.columns(2)
+            m1.metric(msg["metrics"][0]["label"], msg["metrics"][0]["value"])
+            m2.metric(msg["metrics"][1]["label"], msg["metrics"][1]["value"])
+        if msg["chart"]:
+            st.plotly_chart(msg["chart"], use_container_width=True, key=f"hist_chart_{i}")
+        with st.expander("View Records"):
+            st.dataframe(msg["data"], use_container_width=True, key=f"hist_df_{i}")
 
-# 4. QUERY PROCESSING
-user_input = st.chat_input("Ask a question...")
-active_prompt = st.session_state.get('pending_prompt') or user_input
-if st.session_state.get('pending_prompt'): del st.session_state.pending_prompt
-
+# 5. PROCESS NEW QUERY
 if active_prompt:
-    with st.chat_message("user"): st.write(active_prompt)
+    with st.chat_message("user"):
+        st.write(active_prompt)
+        
     with st.chat_message("assistant", avatar="🎥"):
-        sql, err, c_type = parse_query(active_prompt, st.session_state.current_region)
-        res_df, _ = execute_sql(sql, DB_CONN) if sql else (None, None)
-
-        if res_df is not None and not res_df.empty:
-            # PM FEATURE: High-level KPI Summary
-            if "deal_value" in res_df.columns or "total_value" in res_df.columns:
-                val_col = "total_value" if "total_value" in res_df.columns else "deal_value"
-                c1, c2 = st.columns(2)
-                c1.metric("Total Value", f"${res_df[val_col].sum():,.0f}")
-                c2.metric("Records Found", len(res_df))
-
-            # CHARTING
-            x_col = res_df.columns[0]
-            y_col = res_df.columns[1] if len(res_df.columns) > 1 else res_df.columns[0]
+        active_reg = st.session_state.current_region
+        
+        with st.spinner(f"Querying {active_reg}..."):
+            sql, error, chart_type = parse_query(active_prompt, active_reg)
             
-            if c_type == "bar":
-                fig = px.bar(res_df, x=x_col, y=y_col, color=x_col, template="plotly_white")
+            if error:
+                st.error(error)
             else:
-                fig = px.pie(res_df, names=x_col, hole=0.5)
-            
-            st.plotly_chart(fig, use_container_width=True)
-            st.session_state.chat_history.append({"question": active_prompt, "answer": "Analysis complete:", "data": res_df, "chart": fig})
-            
-            # Scroll Fix
-            components.html("<script>var m = window.parent.document.querySelector('section.main'); m.scrollTo({top: m.scrollHeight, behavior:'smooth'});</script>", height=0)
-            st.rerun()
-        else:
-            st.error("No data matches your criteria. Try adjusting the region or search term.")
+                res_df, db_err = execute_sql(sql, DB_CONN)
+                
+                if res_df is not None and not res_df.empty:
+                    # FIX: Flexible Column Mapping for Vendor results
+                    # If it's a 'Top Vendor' query, columns are [vendor_name, total_value]
+                    x_col = res_df.columns[0]
+                    y_col = res_df.columns[1] if len(res_df.columns) > 1 else res_df.columns[0]
+                    
+                    if chart_type == "pie":
+                        fig = px.pie(res_df, names=x_col, title=f"Inventory: {active_reg}", hole=0.4)
+                    else:
+                        fig = px.bar(res_df, x=x_col, y=y_col, title=f"Analysis: {active_reg}", color=x_col)
+
+                    # Dynamic Metrics for Leadership/Finance
+                    metrics_data = None
+                    if any(col in res_df.columns for col in ["deal_value", "total_value"]):
+                        val_col = "deal_value" if "deal_value" in res_df.columns else "total_value"
+                        m1, m2 = st.columns(2)
+                        v_sum = f"${res_df[val_col].sum():,.0f}"
+                        v_avg = f"${res_df[val_col].mean():,.0f}"
+                        m1.metric("Total Value", v_sum)
+                        m2.metric("Average Value", v_avg)
+                        metrics_data = [{"label": "Total Value", "value": v_sum}, {"label": "Average Value", "value": v_avg}]
+                    
+                    st.plotly_chart(fig, use_container_width=True, key=f"new_chart_{time.time()}")
+                    
+                    with st.expander("Explore Dataset", expanded=False):
+                        st.dataframe(res_df, use_container_width=True)
+
+                    # Save to History
+                    st.session_state.chat_history.append({
+                        "question": active_prompt, "answer": f"Displaying {active_reg} Data:",
+                        "data": res_df, "chart": fig, "metrics": metrics_data
+                    })
+                    
+                    # SCROLL FIX
+                    components.html(
+                        f"""
+                        <script>
+                        var main = window.parent.document.querySelector('section.main');
+                        main.scrollTo({{ top: main.scrollHeight, behavior: 'smooth' }});
+                        </script>
+                        """, height=0
+                    )
+                    st.rerun()
+                else:
+                    st.warning(f"No records found for '{active_prompt}' in {active_reg}.")
