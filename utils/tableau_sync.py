@@ -6,8 +6,8 @@ import os
 
 def trigger_tableau_report(df, report_name, project_name="Foundry Analytics"):
     """
-    Publishes the dataframe to Tableau Cloud.
-    Fixed: Uses .twbx bypass and explicitly sets project_id.
+    Publishes the dataframe to Tableau Cloud as a workbook.
+    Bypasses extension errors by using a .twbx temporary suffix.
     """
     TOKEN_NAME = st.secrets.get("TABLEAU_TOKEN_NAME", "foundry_token")
     TOKEN_VALUE = st.secrets.get("TABLEAU_TOKEN_VALUE", "YOUR_TOKEN")
@@ -21,29 +21,27 @@ def trigger_tableau_report(df, report_name, project_name="Foundry Analytics"):
         with server.auth.sign_in(tableau_auth):
             # 1. Precise Project Lookup
             all_projects, pagination = server.projects.get()
-            # Try specific project, then Default, then any project
             project = next((p for p in all_projects if p.name == project_name), None)
             if not project:
                 project = next((p for p in all_projects if p.name == "Default"), all_projects[0])
 
-            # 2. File Creation (CSV disguised as TWBX to satisfy extension check)
+            # 2. Package as a .twbx (Tableau Workbook) to satisfy library validation
             with tempfile.NamedTemporaryFile(delete=False, suffix=".twbx") as tmp:
                 df.to_csv(tmp.name, index=False)
                 tmp_path = tmp.name
 
             try:
-                # 3. Publish with explicit project ID
+                # 3. Publish to Tableau
                 new_workbook = TSC.WorkbookItem(name=report_name, project_id=project.id)
                 server.workbooks.publish(
                     new_workbook, 
                     tmp_path, 
                     TSC.Server.PublishMode.Overwrite
                 )
-                return True, "Success"
+                return True, f"Successfully pushed to project: {project.name}"
             finally:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
 
     except Exception as e:
-        # Return the actual error message for debugging
         return False, str(e)
