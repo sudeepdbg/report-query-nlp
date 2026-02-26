@@ -5,13 +5,13 @@ import streamlit.components.v1 as components
 import time
 from utils.database import init_database, execute_sql
 from utils.query_parser import parse_query
+from utils.tableau_sync import trigger_tableau_report
 
 st.set_page_config(page_title="Foundry Vantage", page_icon="🎥", layout="wide")
 
 @st.cache_resource
 def get_db():
     return init_database()
-
 DB_CONN = get_db()
 
 # 1. Initialize Session States
@@ -32,7 +32,6 @@ if st.session_state.get('pending_prompt'):
 elif user_input:
     active_prompt = user_input
 
-# Auto-detect region to keep Sidebar and Query in sync
 if active_prompt:
     for r in ["NA", "APAC", "EMEA", "LATAM"]:
         if r.lower() in active_prompt.lower():
@@ -85,6 +84,17 @@ for i, msg in enumerate(st.session_state.chat_history):
             m2.metric(msg["metrics"][1]["label"], msg["metrics"][1]["value"])
         if msg["chart"]:
             st.plotly_chart(msg["chart"], use_container_width=True, key=f"hist_chart_{i}")
+        
+        # TABLEAU ACTIONS IN HISTORY
+        st.markdown("---")
+        st.caption("📊 Enterprise Actions")
+        tc1, tc2 = st.columns([3, 1])
+        h_tab_name = tc1.text_input("Tableau Name", value=f"Report_{st.session_state.current_region}_{i}", key=f"h_tab_in_{i}")
+        if tc2.button("🚀 Push", key=f"h_tab_btn_{i}", width="stretch"):
+            success, info = trigger_tableau_report(msg["data"], h_tab_name)
+            if success: st.success("Done!")
+            else: st.error(info)
+
         with st.expander("View Records"):
             st.dataframe(msg["data"], use_container_width=True, key=f"hist_df_{i}")
 
@@ -105,8 +115,6 @@ if active_prompt:
                 res_df, db_err = execute_sql(sql, DB_CONN)
                 
                 if res_df is not None and not res_df.empty:
-                    # FIX: Flexible Column Mapping for Vendor results
-                    # If it's a 'Top Vendor' query, columns are [vendor_name, total_value]
                     x_col = res_df.columns[0]
                     y_col = res_df.columns[1] if len(res_df.columns) > 1 else res_df.columns[0]
                     
@@ -115,7 +123,6 @@ if active_prompt:
                     else:
                         fig = px.bar(res_df, x=x_col, y=y_col, title=f"Analysis: {active_reg}", color=x_col)
 
-                    # Dynamic Metrics for Leadership/Finance
                     metrics_data = None
                     if any(col in res_df.columns for col in ["deal_value", "total_value"]):
                         val_col = "deal_value" if "deal_value" in res_df.columns else "total_value"
@@ -127,17 +134,24 @@ if active_prompt:
                         metrics_data = [{"label": "Total Value", "value": v_sum}, {"label": "Average Value", "value": v_avg}]
                     
                     st.plotly_chart(fig, use_container_width=True, key=f"new_chart_{time.time()}")
+
+                    # TABLEAU ACTIONS FOR LIVE RESPONSE
+                    st.markdown("### 📊 Enterprise Actions")
+                    tc1, tc2 = st.columns([3, 1])
+                    live_tab_name = tc1.text_input("Tableau Name", value=f"New_Report_{active_reg}", key="live_tab_in")
+                    if tc2.button("🚀 Push to Tableau", key="live_tab_btn", width="stretch"):
+                        success, info = trigger_tableau_report(res_df, live_tab_name)
+                        if success: st.success("Pushed!")
+                        else: st.error(info)
                     
                     with st.expander("Explore Dataset", expanded=False):
                         st.dataframe(res_df, use_container_width=True)
 
-                    # Save to History
                     st.session_state.chat_history.append({
                         "question": active_prompt, "answer": f"Displaying {active_reg} Data:",
                         "data": res_df, "chart": fig, "metrics": metrics_data
                     })
                     
-                    # SCROLL FIX
                     components.html(
                         f"""
                         <script>
@@ -149,4 +163,3 @@ if active_prompt:
                     st.rerun()
                 else:
                     st.warning(f"No records found for '{active_prompt}' in {active_reg}.")
-
