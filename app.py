@@ -89,7 +89,7 @@ for i, msg in enumerate(st.session_state.chat_history):
         st.markdown("---")
         st.caption("📊 Enterprise Actions")
         tc1, tc2 = st.columns([3, 1])
-        h_tab_name = tc1.text_input("Tableau Name", value=f"Report_{st.session_state.current_region}_{i}", key=f"h_tab_in_{i}")
+        h_tab_name = tc1.text_input("Tableau Name", value=f"Foundry_Live_Deals_{st.session_state.current_region}_{i}", key=f"h_tab_in_{i}")
         if tc2.button("🚀 Push", key=f"h_tab_btn_{i}", width="stretch"):
             success, info = trigger_tableau_report(msg["data"], h_tab_name)
             if success: st.success("Done!")
