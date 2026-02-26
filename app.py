@@ -5,7 +5,8 @@ import streamlit.components.v1 as components
 import time
 from utils.database import init_database, execute_sql
 from utils.query_parser import parse_query
-from utils.tableau_sync import trigger_tableau_report
+# Added the global sync import here
+from utils.tableau_sync import trigger_tableau_report, sync_global_data 
 
 st.set_page_config(page_title="Foundry Vantage", page_icon="🎥", layout="wide")
 
@@ -21,6 +22,9 @@ if 'current_region' not in st.session_state:
     st.session_state.current_region = 'APAC'
 if 'persona' not in st.session_state:
     st.session_state.persona = 'Product'
+# New: Storage for regional dataframes to enable Global Sync
+if 'global_registry' not in st.session_state:
+    st.session_state.global_registry = {"APAC": None, "LATAM": None, "EMEA": None, "NA": None}
 
 # 2. PRE-RENDER LOGIC
 user_input = st.chat_input("Ask about deals, vendors, or work orders...")
@@ -54,6 +58,27 @@ with st.sidebar:
     persona_options = ["Leadership", "Product", "Operations", "Finance"]
     st.session_state.persona = st.selectbox("View Persona", persona_options, index=persona_options.index(st.session_state.persona))
 
+    # --- NEW: GLOBAL SYNC SECTION ---
+    st.divider()
+    st.subheader("🌎 Global Intelligence")
+    st.info("Syncs all queried regions into one side-by-side dashboard.")
+    
+    if st.button("🚀 Push Global Sync", use_container_width=True, type="primary"):
+        # Filter out empty regions
+        to_sync = {k: v for k, v in st.session_state.global_registry.items() if v is not None}
+        
+        if len(to_sync) < 2:
+            st.warning("Query at least two regions first (e.g., APAC and LATAM) to sync them.")
+        else:
+            with st.spinner("Merging and pushing global data..."):
+                success, info = sync_global_data(to_sync, "Foundry_Global_Master")
+                if success:
+                    st.success("Global Dashboard Ready!")
+                    st.balloons()
+                else:
+                    st.error(info)
+    # --------------------------------
+
     st.divider()
     st.subheader(f"💡 {st.session_state.persona} Queries")
     def get_persona_suggestions(persona, reg):
@@ -70,7 +95,7 @@ with st.sidebar:
             st.session_state.pending_prompt = sug
             st.rerun()
 
-# 4. RENDER HISTORY
+# 4. RENDER HISTORY (Remains the same as your code)
 st.title(f"🔍 {st.session_state.persona} Insights")
 
 for i, msg in enumerate(st.session_state.chat_history):
@@ -85,7 +110,6 @@ for i, msg in enumerate(st.session_state.chat_history):
         if msg["chart"]:
             st.plotly_chart(msg["chart"], use_container_width=True, key=f"hist_chart_{i}")
         
-        # TABLEAU ACTIONS IN HISTORY
         st.markdown("---")
         st.caption("📊 Enterprise Actions")
         tc1, tc2 = st.columns([3, 1])
@@ -115,6 +139,9 @@ if active_prompt:
                 res_df, db_err = execute_sql(sql, DB_CONN)
                 
                 if res_df is not None and not res_df.empty:
+                    # NEW: Update the global registry so we can sync this later
+                    st.session_state.global_registry[active_reg] = res_df
+                    
                     x_col = res_df.columns[0]
                     y_col = res_df.columns[1] if len(res_df.columns) > 1 else res_df.columns[0]
                     
@@ -135,7 +162,6 @@ if active_prompt:
                     
                     st.plotly_chart(fig, use_container_width=True, key=f"new_chart_{time.time()}")
 
-                    # TABLEAU ACTIONS FOR LIVE RESPONSE
                     st.markdown("### 📊 Enterprise Actions")
                     tc1, tc2 = st.columns([3, 1])
                     live_tab_name = tc1.text_input("Tableau Name", value=f"New_Report_{active_reg}", key="live_tab_in")
