@@ -186,6 +186,15 @@ st.markdown("""
         margin: 10px 0;
         color: #333;
     }
+    
+    /* Smooth scrolling */
+    html {
+        scroll-behavior: smooth;
+    }
+    
+    .main .block-container {
+        padding-bottom: 100px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -216,22 +225,27 @@ def get_region_stats(conn, region):
     stats = {}
     try:
         # Deals count
-        df = pd.read_sql_query(f"SELECT COUNT(*) as count FROM deals WHERE UPPER(region) = '{region}'", conn)
-        stats['deals'] = df.iloc[0]['count']
+        deals_query = f"SELECT COUNT(*) as count FROM deals WHERE UPPER(region) = '{region}'"
+        df = pd.read_sql_query(deals_query, conn)
+        stats['deals'] = int(df.iloc[0]['count']) if not df.empty else 0
         
         # Vendors count (distinct vendors in the region)
-        df = pd.read_sql_query(f"SELECT COUNT(DISTINCT vendor_id) as count FROM deals WHERE UPPER(region) = '{region}'", conn)
-        stats['vendors'] = df.iloc[0]['count']
+        vendors_query = f"SELECT COUNT(DISTINCT vendor_id) as count FROM deals WHERE UPPER(region) = '{region}'"
+        df = pd.read_sql_query(vendors_query, conn)
+        stats['vendors'] = int(df.iloc[0]['count']) if not df.empty else 0
         
         # Content count
-        df = pd.read_sql_query(f"SELECT COUNT(*) as count FROM content_planning WHERE UPPER(region) = '{region}'", conn)
-        stats['content'] = df.iloc[0]['count']
+        content_query = f"SELECT COUNT(*) as count FROM content_planning WHERE UPPER(region) = '{region}'"
+        df = pd.read_sql_query(content_query, conn)
+        stats['content'] = int(df.iloc[0]['count']) if not df.empty else 0
         
         # Calculate deltas (compare with previous period)
         # This is simplified - in production you'd want actual historical comparison
         stats['deals_delta'] = "+12%"
         stats['vendors_delta'] = "+3"
         stats['content_delta'] = "+8%"
+        
+        logger.info(f"Stats for {region}: Deals={stats['deals']}, Vendors={stats['vendors']}, Content={stats['content']}")
         
     except Exception as e:
         logger.error(f"Error getting region stats: {e}")
@@ -262,7 +276,9 @@ def init_session_state():
         'db_stats': {},
         'region_stats': {},
         'last_query_sql': None,
-        'last_query_error': None
+        'last_query_error': None,
+        'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'pending_prompt': None
     }
     
     for key, value in defaults.items():
@@ -276,6 +292,8 @@ try:
     DB_CONN = init_db()
     # Update global database stats
     st.session_state.db_stats = get_table_stats(DB_CONN)
+    # Initialize region stats for current region
+    st.session_state.region_stats = get_region_stats(DB_CONN, st.session_state.current_region)
 except Exception as e:
     st.error(f"⚠️ Database connection error: {str(e)}")
     st.stop()
@@ -299,6 +317,11 @@ def format_currency_value(x):
 def safe_apply_format(series, formatter):
     """Safely apply formatting to a series"""
     return series.apply(lambda x: formatter(x) if pd.notnull(x) else "N/A")
+
+def update_region_stats():
+    """Update region stats based on current region"""
+    st.session_state.region_stats = get_region_stats(DB_CONN, st.session_state.current_region)
+    st.session_state.last_updated = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 # ============================================================================
 # Charting Functions
@@ -556,10 +579,13 @@ with st.sidebar:
     with col1:
         st.markdown("### 🎯 Market")
         market_options = ["NA", "APAC", "EMEA", "LATAM"]
+        
         # Create a callback for region change
         def on_region_change():
             # Update region stats when region changes
             st.session_state.region_stats = get_region_stats(DB_CONN, st.session_state.region_selector)
+            st.session_state.current_region = st.session_state.region_selector
+            logger.info(f"Region changed to: {st.session_state.current_region}")
         
         selected_region = st.selectbox(
             "Region",
@@ -569,8 +595,6 @@ with st.sidebar:
             label_visibility="collapsed",
             on_change=on_region_change
         )
-        # Update current region
-        st.session_state.current_region = selected_region
     
     with col2:
         st.markdown("### 👤 Persona")
@@ -583,13 +607,14 @@ with st.sidebar:
             label_visibility="collapsed"
         )
     
-    # Get region-specific stats if not already loaded
+    # Quick stats (now region-specific)
+    st.markdown("### 📊 Quick Stats")
+    
+    # Force stats update if needed
     if not st.session_state.region_stats or st.session_state.region_stats.get('region') != st.session_state.current_region:
         st.session_state.region_stats = get_region_stats(DB_CONN, st.session_state.current_region)
         st.session_state.region_stats['region'] = st.session_state.current_region
     
-    # Quick stats (now region-specific)
-    st.markdown("### 📊 Quick Stats")
     stats_col1, stats_col2, stats_col3 = st.columns(3)
     with stats_col1:
         st.metric(
@@ -610,6 +635,15 @@ with st.sidebar:
             st.session_state.region_stats.get('content_delta', "0%")
         )
     
+    # Add a manual refresh button for stats
+    if st.button("🔄 Refresh Stats", key="refresh_stats", use_container_width=True):
+        with st.spinner("Updating stats..."):
+            st.session_state.region_stats = get_region_stats(DB_CONN, st.session_state.current_region)
+            st.session_state.region_stats['region'] = st.session_state.current_region
+            st.success("Stats updated!")
+            time.sleep(1)
+            st.rerun()
+    
     st.markdown("---")
     
     # Active filters indicator
@@ -620,6 +654,9 @@ with st.sidebar:
         </div>
         <div style="font-size: 12px; color: #666; margin-top: 5px; padding: 0 10px;">
             ℹ️ Query will use this filter unless you specify other regions in your question
+        </div>
+        <div style="font-size: 10px; color: #999; margin-top: 5px; padding: 0 10px;">
+            Last updated: {st.session_state.last_updated}
         </div>
     """, unsafe_allow_html=True)
     
@@ -876,7 +913,7 @@ user_input = st.chat_input("Ask anything about deals, vendors, content, or marke
 active_prompt = None
 if st.session_state.get('pending_prompt'):
     active_prompt = st.session_state.pending_prompt
-    del st.session_state.pending_prompt
+    st.session_state.pending_prompt = None
 elif user_input:
     active_prompt = user_input
 
@@ -1099,14 +1136,17 @@ if active_prompt:
                         "region": region_context
                     })
                     
-                    # Auto-scroll to bottom
+                    # Smooth scroll to bottom
                     components.html(
                         """
                         <script>
-                        window.parent.document.querySelector('section.main').scrollTo({
-                            top: window.parent.document.querySelector('section.main').scrollHeight,
-                            behavior: 'smooth'
-                        });
+                        // Smooth scroll to bottom
+                        setTimeout(function() {
+                            window.parent.document.querySelector('section.main').scrollTo({
+                                top: window.parent.document.querySelector('section.main').scrollHeight,
+                                behavior: 'smooth'
+                            });
+                        }, 100);
                         </script>
                         """,
                         height=0
