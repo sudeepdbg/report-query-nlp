@@ -176,6 +176,16 @@ st.markdown("""
         font-weight: 600;
         margin-right: 10px;
     }
+    
+    /* Info box styling */
+    .info-box {
+        background: rgba(102, 126, 234, 0.1);
+        border-left: 4px solid #667eea;
+        border-radius: 5px;
+        padding: 10px 15px;
+        margin: 10px 0;
+        color: #333;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -216,7 +226,7 @@ def init_session_state():
         'user_preferences': {
             'theme': 'light',
             'default_chart_type': 'auto',
-            'show_sql': True,  # Default to True now
+            'show_sql': True,
             'auto_refresh': False,
             'refresh_interval': 300
         },
@@ -264,7 +274,7 @@ def safe_apply_format(series, formatter):
 # Charting Functions
 # ============================================================================
 
-def create_enhanced_chart(df, chart_type, title, region):
+def create_enhanced_chart(df, chart_type, title, region_context):
     """Create enhanced visualizations with better styling"""
     
     colors = px.colors.qualitative.Set3
@@ -299,9 +309,9 @@ def create_enhanced_chart(df, chart_type, title, region):
         
         fig.update_layout(
             title={
-                'text': f"{title} - {region}",
-                'y':0.95,
-                'x':0.5,
+                'text': f"{title} - {region_context}",
+                'y': 0.95,
+                'x': 0.5,
                 'xanchor': 'center',
                 'yanchor': 'top',
                 'font': dict(size=20, color='#1e3c72')
@@ -350,9 +360,9 @@ def create_enhanced_chart(df, chart_type, title, region):
         
         fig.update_layout(
             title={
-                'text': f"{title} - {region}",
-                'y':0.95,
-                'x':0.5,
+                'text': f"{title} - {region_context}",
+                'y': 0.95,
+                'x': 0.5,
                 'xanchor': 'center',
                 'yanchor': 'top',
                 'font': dict(size=20, color='#1e3c72')
@@ -392,9 +402,9 @@ def create_enhanced_chart(df, chart_type, title, region):
         
         fig.update_layout(
             title={
-                'text': f"{title} - {region}",
-                'y':0.95,
-                'x':0.5,
+                'text': f"{title} - {region_context}",
+                'y': 0.95,
+                'x': 0.5,
                 'xanchor': 'center',
                 'yanchor': 'top',
                 'font': dict(size=20, color='#1e3c72')
@@ -441,9 +451,9 @@ def create_enhanced_chart(df, chart_type, title, region):
             
             fig.update_layout(
                 title={
-                    'text': f"{title} - {region}",
-                    'y':0.95,
-                    'x':0.5,
+                    'text': f"{title} - {region_context}",
+                    'y': 0.95,
+                    'x': 0.5,
                     'xanchor': 'center',
                     'yanchor': 'top',
                     'font': dict(size=20, color='#1e3c72')
@@ -454,7 +464,7 @@ def create_enhanced_chart(df, chart_type, title, region):
                 plot_bgcolor='rgba(0,0,0,0)'
             )
         except:
-            fig = create_enhanced_chart(df, "bar", title, region)
+            fig = create_enhanced_chart(df, "bar", title, region_context)
     
     elif chart_type == "area":
         fig = go.Figure(data=[
@@ -473,9 +483,9 @@ def create_enhanced_chart(df, chart_type, title, region):
         
         fig.update_layout(
             title={
-                'text': f"{title} - {region}",
-                'y':0.95,
-                'x':0.5,
+                'text': f"{title} - {region_context}",
+                'y': 0.95,
+                'x': 0.5,
                 'xanchor': 'center',
                 'yanchor': 'top',
                 'font': dict(size=20, color='#1e3c72')
@@ -492,90 +502,9 @@ def create_enhanced_chart(df, chart_type, title, region):
     
     else:
         # Default to bar chart
-        fig = create_enhanced_chart(df, "bar", title, region)
+        fig = create_enhanced_chart(df, "bar", title, region_context)
     
     return fig
-
-def create_dashboard_overview(df, region):
-    """Create an executive dashboard overview"""
-    
-    # Calculate key metrics
-    value_cols = [col for col in df.columns if any(x in col.lower() for x in ['value', 'total', 'budget', 'cost'])]
-    
-    if value_cols:
-        val_col = value_cols[0]
-        try:
-            df[val_col] = pd.to_numeric(df[val_col], errors='coerce')
-            
-            total_value = df[val_col].sum()
-            avg_value = df[val_col].mean()
-            max_value = df[val_col].max()
-            min_value = df[val_col].min()
-            record_count = len(df)
-            
-            # Create gauge charts for KPIs
-            fig_gauge = make_subplots(
-                rows=1, cols=3,
-                specs=[[{'type': 'indicator'}, {'type': 'indicator'}, {'type': 'indicator'}]],
-                subplot_titles=('Total Value', 'Average Value', 'Record Count')
-            )
-            
-            fig_gauge.add_trace(
-                go.Indicator(
-                    mode="number+gauge+delta",
-                    value=total_value if pd.notnull(total_value) else 0,
-                    title={"text": "Total Value"},
-                    delta={'reference': total_value * 0.8 if total_value else 0},
-                    gauge={
-                        'axis': {'range': [None, total_value * 1.5 if total_value else 100]},
-                        'bar': {'color': "#1e3c72"},
-                        'steps': [
-                            {'range': [0, total_value * 0.5 if total_value else 50], 'color': "lightgray"},
-                            {'range': [total_value * 0.5 if total_value else 50, total_value if total_value else 100], 'color': "gray"}
-                        ],
-                        'threshold': {
-                            'line': {'color': "red", 'width': 4},
-                            'thickness': 0.75,
-                            'value': total_value * 0.9 if total_value else 90
-                        }
-                    },
-                    number={'prefix': "$", 'font': {'size': 20}}
-                ),
-                row=1, col=1
-            )
-            
-            fig_gauge.add_trace(
-                go.Indicator(
-                    mode="number",
-                    value=avg_value if pd.notnull(avg_value) else 0,
-                    title={"text": "Average Value"},
-                    number={'prefix': "$", 'font': {'size': 20}}
-                ),
-                row=1, col=2
-            )
-            
-            fig_gauge.add_trace(
-                go.Indicator(
-                    mode="number",
-                    value=record_count,
-                    title={"text": "Record Count"},
-                    number={'font': {'size': 20}}
-                ),
-                row=1, col=3
-            )
-            
-            fig_gauge.update_layout(
-                height=250,
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)',
-                margin=dict(t=50, l=30, r=30, b=30)
-            )
-            
-            return fig_gauge
-        except:
-            return None
-    
-    return None
 
 # ============================================================================
 # Sidebar
@@ -636,6 +565,9 @@ with st.sidebar:
         <div style="background: rgba(102,126,234,0.1); padding: 10px; border-radius: 10px; margin-bottom: 10px;">
             <span class="region-indicator">{st.session_state.current_region}</span>
             <span style="color: #666;">Active Filter</span>
+        </div>
+        <div style="font-size: 12px; color: #666; margin-top: 5px; padding: 0 10px;">
+            ℹ️ Query will use this filter unless you specify other regions in your question
         </div>
     """, unsafe_allow_html=True)
     
@@ -896,20 +828,6 @@ if st.session_state.get('pending_prompt'):
 elif user_input:
     active_prompt = user_input
 
-# Update region from query - but don't override if user explicitly selected different region
-if active_prompt:
-    detected_region = None
-    for r in ["NA", "APAC", "EMEA", "LATAM"]:
-        if r.lower() in active_prompt.lower():
-            detected_region = r
-            break
-    
-    # Only update if region detected AND it's different from current
-    if detected_region and detected_region != st.session_state.current_region:
-        # Show a warning that we're using the detected region
-        st.warning(f"🔍 Detected region '{detected_region}' in your query. Overriding selected region.")
-        st.session_state.current_region = detected_region
-
 # Display chat history
 for i, msg in enumerate(st.session_state.chat_history):
     with st.chat_message("user"):
@@ -986,10 +904,9 @@ if active_prompt:
         st.markdown(f"**{active_prompt}**")
     
     with st.chat_message("assistant", avatar="🎥"):
-        active_reg = st.session_state.current_region
-        
-        with st.spinner(f"🔍 Analyzing {active_reg} market data..."):
-            sql, error, chart_type = parse_query(active_prompt, active_reg)
+        with st.spinner(f"🔍 Analyzing market data..."):
+            # Parse the query - now returns 4 values
+            sql, error, chart_type, region_context = parse_query(active_prompt, st.session_state.current_region)
             
             if error:
                 st.error(f"❌ Query parsing error: {error}")
@@ -999,17 +916,28 @@ if active_prompt:
                     with st.expander("🔍 View SQL Query", expanded=True):
                         st.markdown(f'<div class="sql-query-box">{sql}</div>', unsafe_allow_html=True)
                 
+                # Execute the query
                 res_df, db_err = execute_sql(sql, DB_CONN)
                 
                 if res_df is not None and not res_df.empty:
-                    # Verify region filtering
+                    # Show region info
                     if 'region' in res_df.columns:
-                        unique_regions = res_df['region'].unique()
-                        if len(unique_regions) == 1 and unique_regions[0] != active_reg:
-                            st.warning(f"⚠️ Data is filtered for '{unique_regions[0]}' but you have '{active_reg}' selected.")
+                        returned_regions = res_df['region'].unique().tolist()
+                        if len(returned_regions) > 1:
+                            st.markdown(f"""
+                                <div class="info-box">
+                                    📊 Showing data for <strong>{', '.join(returned_regions)}</strong> regions
+                                </div>
+                            """, unsafe_allow_html=True)
+                        elif returned_regions[0] != st.session_state.current_region:
+                            st.markdown(f"""
+                                <div class="info-box">
+                                    📊 Showing data for <strong>{returned_regions[0]}</strong> (override from query)
+                                </div>
+                            """, unsafe_allow_html=True)
                     
                     # Create enhanced chart based on data
-                    fig = create_enhanced_chart(res_df, chart_type, active_prompt, active_reg)
+                    fig = create_enhanced_chart(res_df, chart_type, active_prompt, region_context)
                     
                     # Calculate metrics
                     metrics_data = []
@@ -1063,7 +991,7 @@ if active_prompt:
                         with col1:
                             live_tab_name = st.text_input(
                                 "Report Name",
-                                value=f"Foundry_{active_reg}_{datetime.now().strftime('%Y%m%d_%H%M')}",
+                                value=f"Foundry_{region_context}_{datetime.now().strftime('%Y%m%d_%H%M')}",
                                 key="live_tab_name"
                             )
                         with col2:
@@ -1111,12 +1039,12 @@ if active_prompt:
                     # Add to chat history
                     st.session_state.chat_history.append({
                         "question": active_prompt,
-                        "answer": f"📊 Analysis for {active_reg} market complete. Here are the key insights:",
+                        "answer": f"📊 Analysis complete. Here are the key insights:",
                         "data": res_df,
                         "chart": fig,
                         "metrics": metrics_data,
                         "sql": sql,
-                        "region": active_reg
+                        "region": region_context
                     })
                     
                     # Auto-scroll to bottom
@@ -1134,7 +1062,7 @@ if active_prompt:
                     
                     st.rerun()
                 else:
-                    st.warning(f"ℹ️ No records found for '{active_prompt}' in {active_reg}. Try a different query or region.")
+                    st.warning(f"ℹ️ No records found for your query. Try a different query or region.")
 
 # Footer
 st.markdown("---")
