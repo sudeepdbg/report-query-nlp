@@ -210,6 +210,35 @@ def init_db():
                 st.error(f"Failed to connect to database after {max_retries} attempts. Please refresh the page.")
                 raise
 
+# Function to get region-specific stats
+def get_region_stats(conn, region):
+    """Get statistics for a specific region"""
+    stats = {}
+    try:
+        # Deals count
+        df = pd.read_sql_query(f"SELECT COUNT(*) as count FROM deals WHERE UPPER(region) = '{region}'", conn)
+        stats['deals'] = df.iloc[0]['count']
+        
+        # Vendors count (distinct vendors in the region)
+        df = pd.read_sql_query(f"SELECT COUNT(DISTINCT vendor_id) as count FROM deals WHERE UPPER(region) = '{region}'", conn)
+        stats['vendors'] = df.iloc[0]['count']
+        
+        # Content count
+        df = pd.read_sql_query(f"SELECT COUNT(*) as count FROM content_planning WHERE UPPER(region) = '{region}'", conn)
+        stats['content'] = df.iloc[0]['count']
+        
+        # Calculate deltas (compare with previous period)
+        # This is simplified - in production you'd want actual historical comparison
+        stats['deals_delta'] = "+12%"
+        stats['vendors_delta'] = "+3"
+        stats['content_delta'] = "+8%"
+        
+    except Exception as e:
+        logger.error(f"Error getting region stats: {e}")
+        stats = {'deals': 0, 'vendors': 0, 'content': 0, 'deals_delta': "0%", 'vendors_delta': "0", 'content_delta': "0%"}
+    
+    return stats
+
 # Initialize session state
 def init_session_state():
     """Initialize all session state variables"""
@@ -231,6 +260,7 @@ def init_session_state():
             'refresh_interval': 300
         },
         'db_stats': {},
+        'region_stats': {},
         'last_query_sql': None,
         'last_query_error': None
     }
@@ -244,7 +274,7 @@ init_session_state()
 # Initialize database connection
 try:
     DB_CONN = init_db()
-    # Update database stats
+    # Update global database stats
     st.session_state.db_stats = get_table_stats(DB_CONN)
 except Exception as e:
     st.error(f"⚠️ Database connection error: {str(e)}")
@@ -526,16 +556,21 @@ with st.sidebar:
     with col1:
         st.markdown("### 🎯 Market")
         market_options = ["NA", "APAC", "EMEA", "LATAM"]
+        # Create a callback for region change
+        def on_region_change():
+            # Update region stats when region changes
+            st.session_state.region_stats = get_region_stats(DB_CONN, st.session_state.region_selector)
+        
         selected_region = st.selectbox(
             "Region",
             market_options,
             index=market_options.index(st.session_state.current_region) if st.session_state.current_region in market_options else 1,
             key="region_selector",
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            on_change=on_region_change
         )
-        # Only update if different from current
-        if selected_region != st.session_state.current_region:
-            st.session_state.current_region = selected_region
+        # Update current region
+        st.session_state.current_region = selected_region
     
     with col2:
         st.markdown("### 👤 Persona")
@@ -548,15 +583,32 @@ with st.sidebar:
             label_visibility="collapsed"
         )
     
-    # Quick stats
+    # Get region-specific stats if not already loaded
+    if not st.session_state.region_stats or st.session_state.region_stats.get('region') != st.session_state.current_region:
+        st.session_state.region_stats = get_region_stats(DB_CONN, st.session_state.current_region)
+        st.session_state.region_stats['region'] = st.session_state.current_region
+    
+    # Quick stats (now region-specific)
     st.markdown("### 📊 Quick Stats")
     stats_col1, stats_col2, stats_col3 = st.columns(3)
     with stats_col1:
-        st.metric("Deals", f"{st.session_state.db_stats.get('deals', 0):,}", "+12%")
+        st.metric(
+            "Deals", 
+            f"{st.session_state.region_stats.get('deals', 0):,}", 
+            st.session_state.region_stats.get('deals_delta', "0%")
+        )
     with stats_col2:
-        st.metric("Vendors", f"{st.session_state.db_stats.get('vendors', 0):,}", "+3")
+        st.metric(
+            "Vendors", 
+            f"{st.session_state.region_stats.get('vendors', 0):,}", 
+            st.session_state.region_stats.get('vendors_delta', "0")
+        )
     with stats_col3:
-        st.metric("Content", f"{st.session_state.db_stats.get('content_planning', 0):,}", "+8%")
+        st.metric(
+            "Content", 
+            f"{st.session_state.region_stats.get('content', 0):,}", 
+            st.session_state.region_stats.get('content_delta', "0%")
+        )
     
     st.markdown("---")
     
