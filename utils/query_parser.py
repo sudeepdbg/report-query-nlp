@@ -228,7 +228,7 @@ class QueryParser:
                     FROM vendors v
                     LEFT JOIN deals d ON v.vendor_id = d.vendor_id
                     WHERE {where_clause}
-                    GROUP BY v.vendor_id
+                    GROUP BY v.vendor_id, v.vendor_name, v.rating, v.certification_level
                     ORDER BY total_value {order}
                     LIMIT {aggregations['limit']}
                 """
@@ -244,7 +244,7 @@ class QueryParser:
                     FROM vendors v
                     LEFT JOIN deals d ON v.vendor_id = d.vendor_id
                     WHERE {where_clause}
-                    GROUP BY v.vendor_id
+                    GROUP BY v.vendor_id, v.vendor_name, v.rating, v.vendor_type, v.certification_level
                     ORDER BY total_deal_value DESC
                 """
             chart_type = 'bar'
@@ -255,7 +255,7 @@ class QueryParser:
                 field = aggregations['field'] or 'deal_value'
                 sql = f"""
                     SELECT 
-                        COALESCE(vendor_name, 'Total') as vendor,
+                        vendor_name,
                         {agg_func}({field}) as value
                     FROM deals
                     WHERE {where_clause}
@@ -264,6 +264,9 @@ class QueryParser:
                 """
             elif aggregations['type'] == 'breakdown' or aggregations['group_by']:
                 group_field = aggregations['group_by'] or 'deal_type'
+                # Ensure group_field is a valid column name
+                if group_field not in ['deal_type', 'rights_scope', 'region', 'currency', 'status']:
+                    group_field = 'deal_type'
                 sql = f"""
                     SELECT 
                         {group_field} as category,
@@ -395,15 +398,15 @@ class QueryParser:
         elif intent == 'quality_analysis':
             sql = f"""
                 SELECT 
-                    vendor_name,
-                    AVG(rating) as avg_rating,
-                    AVG(quality_score) as avg_quality_score,
-                    COUNT(*) as total_work_orders
+                    v.vendor_name,
+                    AVG(v.rating) as avg_rating,
+                    AVG(w.quality_score) as avg_quality_score,
+                    COUNT(w.work_order_id) as total_work_orders
                 FROM work_orders w
                 JOIN vendors v ON w.vendor_id = v.vendor_id
-                WHERE {where_clause}
-                GROUP BY w.vendor_id
-                HAVING total_work_orders > 5
+                WHERE {where_clause.replace('region', 'w.region')}
+                GROUP BY w.vendor_id, v.vendor_name
+                HAVING COUNT(w.work_order_id) > 5
                 ORDER BY avg_quality_score DESC
             """
             chart_type = 'bar'
@@ -423,7 +426,7 @@ class QueryParser:
                     COUNT(*),
                     SUM(cost)
                 FROM work_orders
-                WHERE {where_clause}
+                WHERE {where_clause.replace('region', 'region')}
                 UNION ALL
                 SELECT 
                     'Content',
