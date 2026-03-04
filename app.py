@@ -11,9 +11,8 @@ import logging
 from typing import Optional, Dict, Any
 
 # Import utilities
-from utils.database import init_database, execute_sql, DatabaseManager, get_table_stats
-from utils.query_parser import parse_query, QueryParser
-from utils.tableau_sync import trigger_tableau_report
+from utils.database import init_database, execute_sql, get_table_stats
+from utils.query_parser import parse_query
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -215,527 +214,9 @@ except Exception as e:
     st.error(f"⚠️ Database connection error: {str(e)}")
     st.stop()
 
-# Sidebar
-with st.sidebar:
-    st.image("https://via.placeholder.com/200x80/667eea/ffffff?text=FOUNDRY+VANTAGE", use_container_width=True)
-    
-    # User profile section
-    with st.expander("👤 User Profile", expanded=False):
-        st.text_input("Name", value="John Doe", key="user_name")
-        st.text_input("Email", value="john.doe@foundry.com", key="user_email")
-        st.selectbox("Role", ["Executive", "Analyst", "Manager", "Operator"], key="user_role")
-    
-    st.markdown("---")
-    
-    # Main controls in columns
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("### 🎯 Market")
-        market_options = ["NA", "APAC", "EMEA", "LATAM", "Global"]
-        st.session_state.current_region = st.selectbox(
-            "Region",
-            market_options,
-            index=market_options.index(st.session_state.current_region) if st.session_state.current_region in market_options else 1,
-            key="region_selector",
-            label_visibility="collapsed"
-        )
-    
-    with col2:
-        st.markdown("### 👤 Persona")
-        persona_options = ["Leadership", "Product", "Operations", "Finance", "Analytics"]
-        st.session_state.persona = st.selectbox(
-            "View as",
-            persona_options,
-            index=persona_options.index(st.session_state.persona) if st.session_state.persona in persona_options else 2,
-            key="persona_selector",
-            label_visibility="collapsed"
-        )
-    
-    # Quick stats
-    st.markdown("### 📊 Quick Stats")
-    stats_col1, stats_col2, stats_col3 = st.columns(3)
-    with stats_col1:
-        st.metric("Deals", f"{st.session_state.db_stats.get('deals', 0):,}", "+12%")
-    with stats_col2:
-        st.metric("Vendors", f"{st.session_state.db_stats.get('vendors', 0):,}", "+3")
-    with stats_col3:
-        st.metric("Content", f"{st.session_state.db_stats.get('content_planning', 0):,}", "+8%")
-    
-    st.markdown("---")
-    
-    # Persona-specific quick actions
-    st.markdown(f"### 💡 {st.session_state.persona} Quick Actions")
-    
-    def get_persona_actions(persona, reg):
-        """Get persona-specific suggested queries"""
-        actions = {
-            "Leadership": [
-                ("📈 Executive Dashboard", f"Show executive dashboard for {reg}"),
-                ("💰 Revenue Analysis", f"Revenue breakdown by region {reg}"),
-                ("🎯 Strategic Deals", f"Top 10 strategic deals in {reg}"),
-                ("📊 Market Overview", f"Market performance overview for {reg}")
-            ],
-            "Product": [
-                ("🎬 Rights Analysis", f"SVOD vs AVOD rights in {reg}"),
-                ("📺 Genre Performance", f"Content performance by genre in {reg}"),
-                ("🆕 Release Pipeline", f"Upcoming releases in {reg}"),
-                ("📈 Content Demand", f"Content demand forecast for {reg}")
-            ],
-            "Operations": [
-                ("⚡ Work Order Status", f"Work order status breakdown for {reg}"),
-                ("⏰ Delayed Tasks", f"Delayed work orders in {reg}"),
-                ("👥 Vendor Performance", f"Vendor quality metrics for {reg}"),
-                ("📋 Resource Allocation", f"Resource allocation by vendor in {reg}")
-            ],
-            "Finance": [
-                ("💰 Deal Value Analysis", f"Deal value distribution in {reg}"),
-                ("📊 Vendor Spend", f"Total spend per vendor in {reg}"),
-                ("💱 Currency Impact", f"Currency impact analysis in {reg}"),
-                ("📈 Budget vs Actual", f"Budget vs actual spend in {reg}")
-            ],
-            "Analytics": [
-                ("📊 Trend Analysis", f"Market trends in {reg}"),
-                ("🔮 Predictive Insights", f"Predictive analytics for {reg}"),
-                ("📈 Correlation Analysis", f"Deal correlations in {reg}"),
-                ("🎯 Anomaly Detection", f"Anomalies in {reg} market")
-            ]
-        }
-        return actions.get(persona, actions["Product"])
-    
-    # Display action buttons
-    for action_label, action_query in get_persona_actions(st.session_state.persona, st.session_state.current_region):
-        if st.button(action_label, use_container_width=True, key=f"action_{action_label}"):
-            st.session_state.pending_prompt = action_query
-            st.rerun()
-    
-    st.markdown("---")
-    
-    # Favorites section
-    st.markdown("### ⭐ Favorite Queries")
-    if st.session_state.favorite_queries:
-        for i, fav in enumerate(st.session_state.favorite_queries[-5:]):
-            if st.button(f"📌 {fav[:30]}...", key=f"fav_{i}", use_container_width=True):
-                st.session_state.pending_prompt = fav
-                st.rerun()
-    else:
-        st.info("No favorites yet. Click ★ to save queries.")
-    
-    if st.button("➕ Add Current to Favorites", use_container_width=True, key="add_fav"):
-        if st.session_state.chat_history:
-            last_query = st.session_state.chat_history[-1]["question"]
-            if last_query not in st.session_state.favorite_queries:
-                st.session_state.favorite_queries.append(last_query)
-                st.success("✅ Added to favorites!")
-                time.sleep(1)
-                st.rerun()
-    
-    st.markdown("---")
-    
-    # Settings
-    with st.expander("⚙️ Settings", expanded=False):
-        st.session_state.user_preferences['show_sql'] = st.toggle("Show SQL Queries", value=st.session_state.user_preferences['show_sql'])
-        st.session_state.user_preferences['auto_refresh'] = st.toggle("Auto-refresh Data", value=st.session_state.user_preferences['auto_refresh'])
-        if st.session_state.user_preferences['auto_refresh']:
-            st.session_state.user_preferences['refresh_interval'] = st.slider("Refresh Interval (s)", 60, 3600, 300, step=60)
-        
-        st.selectbox("Default Chart Type", ["auto", "bar", "line", "pie", "area", "heatmap"], 
-                    key="default_chart_type")
-
-# Main content area
-st.title(f"🎥 Foundry Vantage - {st.session_state.persona} Intelligence")
-st.markdown(f"### {st.session_state.current_region} Market Analysis • {st.session_state.date_range}")
-
-# Create tabs for different views
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Analytics", "📈 Insights", "🔮 Predictions", "📋 Reports"])
-
-with tab1:
-    # Analytics view - will be filled by chat responses
-    pass
-
-with tab2:
-    # Insights view
-    st.markdown("### 📊 Key Insights")
-    
-    if st.session_state.chat_history:
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            with st.container():
-                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                st.metric(
-                    "Total Queries",
-                    len(st.session_state.chat_history),
-                    "+2 today",
-                    delta_color="normal"
-                )
-                st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col2:
-            with st.container():
-                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                total_records = sum(len(msg["data"]) for msg in st.session_state.chat_history if "data" in msg)
-                st.metric("Records Analyzed", f"{total_records:,}", "+1.2K")
-                st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col3:
-            with st.container():
-                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                st.metric("Avg Response", "0.8s", "-0.2s")
-                st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col4:
-            with st.container():
-                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                st.metric("Success Rate", "98%", "+2%")
-                st.markdown('</div>', unsafe_allow_html=True)
-    else:
-        st.info("👆 Start by asking a question in the chat below!")
-
-with tab3:
-    # Predictions view
-    st.markdown("### 🔮 Market Predictions")
-    
-    # Sample prediction widgets
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        st.subheader("📈 Revenue Forecast")
-        
-        # Create sample forecast data
-        dates = pd.date_range(start=datetime.now(), periods=12, freq='M')
-        forecast = np.random.normal(1000000, 200000, 12).cumsum()
-        
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=dates,
-            y=forecast,
-            mode='lines+markers',
-            name='Forecast',
-            line=dict(color='#667eea', width=3),
-            fill='tozeroy',
-            fillcolor='rgba(102,126,234,0.1)'
-        ))
-        
-        fig.update_layout(
-            title="12-Month Revenue Forecast",
-            xaxis_title="Month",
-            yaxis_title="Revenue ($)",
-            height=400,
-            margin=dict(t=50, l=50, r=30, b=50),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)'
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        st.subheader("🎯 Risk Assessment")
-        
-        # Sample risk metrics
-        risk_data = pd.DataFrame({
-            'Category': ['Market Risk', 'Operational Risk', 'Financial Risk', 'Compliance Risk'],
-            'Score': [65, 42, 78, 35],
-            'Threshold': [70, 50, 80, 40]
-        })
-        
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=risk_data['Category'],
-            y=risk_data['Score'],
-            name='Current Score',
-            marker_color='#667eea'
-        ))
-        fig.add_trace(go.Scatter(
-            x=risk_data['Category'],
-            y=risk_data['Threshold'],
-            name='Threshold',
-            mode='lines+markers',
-            line=dict(color='red', width=2, dash='dash')
-        ))
-        
-        fig.update_layout(
-            title="Risk Assessment Scores",
-            yaxis_title="Risk Score",
-            height=400,
-            margin=dict(t=50, l=50, r=30, b=50),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)'
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-with tab4:
-    # Reports view
-    st.markdown("### 📋 Saved Reports")
-    
-    reports = [
-        {"name": "Monthly Deal Summary", "date": "2024-03-01", "type": "PDF", "size": "2.3 MB"},
-        {"name": "Vendor Performance Q1", "date": "2024-02-28", "type": "Excel", "size": "1.1 MB"},
-        {"name": "Content Rights Analysis", "date": "2024-02-25", "type": "PDF", "size": "3.7 MB"},
-        {"name": "Work Order Efficiency", "date": "2024-02-20", "type": "CSV", "size": "0.8 MB"},
-    ]
-    
-    for report in reports:
-        col1, col2, col3, col4, col5 = st.columns([3, 2, 1, 1, 1])
-        with col1:
-            st.write(f"📄 {report['name']}")
-        with col2:
-            st.write(report['date'])
-        with col3:
-            st.write(report['type'])
-        with col4:
-            st.write(report['size'])
-        with col5:
-            st.button("📥", key=f"download_{report['name']}")
-
-# Chat input
-user_input = st.chat_input("Ask anything about deals, vendors, content, or market performance...")
-
-# Process pending prompts or new input
-active_prompt = None
-if st.session_state.get('pending_prompt'):
-    active_prompt = st.session_state.pending_prompt
-    del st.session_state.pending_prompt
-elif user_input:
-    active_prompt = user_input
-
-# Update region from query
-if active_prompt:
-    for r in ["NA", "APAC", "EMEA", "LATAM"]:
-        if r.lower() in active_prompt.lower():
-            st.session_state.current_region = r
-            break
-
-# Display chat history
-for i, msg in enumerate(st.session_state.chat_history):
-    with st.chat_message("user"):
-        st.markdown(f"**{msg['question']}**")
-    
-    with st.chat_message("assistant", avatar="🎥"):
-        st.markdown(msg.get("answer", "Here are the results:"))
-        
-        # Display metrics if available
-        if msg.get("metrics"):
-            metrics_cols = st.columns(len(msg["metrics"]))
-            for col, metric in zip(metrics_cols, msg["metrics"]):
-                with col:
-                    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                    st.metric(metric["label"], metric["value"])
-                    st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Display chart
-        if msg.get("chart"):
-            st.plotly_chart(msg["chart"], use_container_width=True, key=f"chart_{i}_{time.time()}")
-        
-        # Enterprise actions
-        with st.expander("📊 Enterprise Actions & Data Export", expanded=False):
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                tab_name = st.text_input(
-                    "Report Name", 
-                    value=f"Foundry_{st.session_state.current_region}_{datetime.now().strftime('%Y%m%d')}",
-                    key=f"tab_name_{i}"
-                )
-            with col2:
-                if st.button("🚀 Push to Tableau", key=f"push_{i}"):
-                    with st.spinner("Pushing to Tableau..."):
-                        success, info = trigger_tableau_report(msg["data"], tab_name)
-                        if success:
-                            st.success("✅ Report pushed successfully!")
-                        else:
-                            st.error(f"❌ Failed: {info}")
-            
-            # Export options
-            col3, col4, col5 = st.columns(3)
-            with col3:
-                csv = msg["data"].to_csv(index=False)
-                st.download_button(
-                    "📥 Download CSV",
-                    csv,
-                    f"{tab_name}.csv",
-                    "text/csv",
-                    use_container_width=True
-                )
-            with col4:
-                st.button("📊 Export to Excel", key=f"excel_{i}", use_container_width=True)
-            with col5:
-                st.button("📧 Email Report", key=f"email_{i}", use_container_width=True)
-            
-            # Data preview
-            st.markdown("##### Data Preview")
-            st.dataframe(
-                msg["data"],
-                use_container_width=True,
-                height=300,
-                column_config={
-                    "deal_value": st.column_config.NumberColumn("Deal Value", format="$%.2f"),
-                    "vendor_rating": st.column_config.NumberColumn("Rating", format="%.1f ⭐")
-                }
-            )
-
-# Process new query
-if active_prompt:
-    with st.chat_message("user"):
-        st.markdown(f"**{active_prompt}**")
-    
-    with st.chat_message("assistant", avatar="🎥"):
-        active_reg = st.session_state.current_region
-        
-        with st.spinner(f"🔍 Analyzing {active_reg} market data..."):
-            sql, error, chart_type = parse_query(active_prompt, active_reg)
-            
-            if error:
-                st.error(f"❌ Query parsing error: {error}")
-            else:
-                # Show SQL if enabled in preferences
-                if st.session_state.user_preferences['show_sql']:
-                    with st.expander("View SQL Query", expanded=False):
-                        st.code(sql, language="sql")
-                
-                res_df, db_err = execute_sql(sql, DB_CONN)
-                
-                if res_df is not None and not res_df.empty:
-                    # Create enhanced chart based on data
-                    fig = create_enhanced_chart(res_df, chart_type, active_prompt, active_reg)
-                    
-                    # Calculate metrics
-                    metrics_data = []
-                    if any(col in res_df.columns for col in ["deal_value", "total_value", "value", "budget", "cost"]):
-                        val_col = next(col for col in ["deal_value", "total_value", "value", "budget", "cost"] if col in res_df.columns)
-                        
-                        # Calculate key metrics
-                        total = res_df[val_col].sum()
-                        avg = res_df[val_col].mean()
-                        count = len(res_df)
-                        max_val = res_df[val_col].max()
-                        
-                        # Display metrics in a grid
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                            st.metric("Total Value", f"${total:,.0f}")
-                            st.markdown('</div>', unsafe_allow_html=True)
-                        with col2:
-                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                            st.metric("Average Value", f"${avg:,.0f}")
-                            st.markdown('</div>', unsafe_allow_html=True)
-                        with col3:
-                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                            st.metric("Record Count", f"{count:,}")
-                            st.markdown('</div>', unsafe_allow_html=True)
-                        with col4:
-                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                            st.metric("Maximum", f"${max_val:,.0f}")
-                            st.markdown('</div>', unsafe_allow_html=True)
-                        
-                        metrics_data = [
-                            {"label": "Total Value", "value": f"${total:,.0f}"},
-                            {"label": "Average Value", "value": f"${avg:,.0f}"},
-                            {"label": "Record Count", "value": f"{count:,}"},
-                            {"label": "Maximum", "value": f"${max_val:,.0f}"}
-                        ]
-                    
-                    # Display the main chart
-                    st.plotly_chart(fig, use_container_width=True, key=f"new_chart_{time.time()}")
-                    
-                    # Enterprise actions
-                    with st.expander("📊 Enterprise Actions & Data Export", expanded=True):
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            live_tab_name = st.text_input(
-                                "Report Name",
-                                value=f"Foundry_{active_reg}_{datetime.now().strftime('%Y%m%d_%H%M')}",
-                                key="live_tab_name"
-                            )
-                        with col2:
-                            if st.button("🚀 Push to Tableau", key="live_push", use_container_width=True):
-                                with st.spinner("Pushing to Tableau..."):
-                                    success, info = trigger_tableau_report(res_df, live_tab_name)
-                                    if success:
-                                        st.success("✅ Report pushed successfully!")
-                                    else:
-                                        st.error(f"❌ Failed: {info}")
-                        
-                        # Data preview with enhanced formatting
-                        st.markdown("##### Detailed Data View")
-                        
-                        # Format currency columns
-                        display_df = res_df.copy()
-                        for col in display_df.columns:
-                            if 'value' in col.lower() or 'price' in col.lower() or 'budget' in col.lower() or 'cost' in col.lower():
-                                display_df[col] = display_df[col].apply(lambda x: f"${x:,.2f}" if pd.notnull(x) else x)
-                        
-                        st.dataframe(
-                            display_df,
-                            use_container_width=True,
-                            height=400,
-                            column_config={
-                                "deal_date": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
-                                "vendor_rating": st.column_config.NumberColumn("Rating", format="%.1f ⭐")
-                            }
-                        )
-                        
-                        # Download options
-                        col3, col4, col5 = st.columns(3)
-                        with col3:
-                            csv = res_df.to_csv(index=False)
-                            st.download_button(
-                                "📥 Download as CSV",
-                                csv,
-                                f"{live_tab_name}.csv",
-                                "text/csv",
-                                use_container_width=True,
-                                key="download_csv"
-                            )
-                        with col4:
-                            st.button("📊 Export to Excel", key="excel_export", use_container_width=True)
-                        with col5:
-                            st.button("📧 Schedule Report", key="schedule_report", use_container_width=True)
-                    
-                    # Add to chat history
-                    st.session_state.chat_history.append({
-                        "question": active_prompt,
-                        "answer": f"📊 Analysis for {active_reg} market complete. Here are the key insights:",
-                        "data": res_df,
-                        "chart": fig,
-                        "metrics": metrics_data
-                    })
-                    
-                    # Auto-scroll to bottom
-                    components.html(
-                        """
-                        <script>
-                        window.parent.document.querySelector('section.main').scrollTo({
-                            top: window.parent.document.querySelector('section.main').scrollHeight,
-                            behavior: 'smooth'
-                        });
-                        </script>
-                        """,
-                        height=0
-                    )
-                    
-                    st.rerun()
-                else:
-                    st.warning(f"ℹ️ No records found for '{active_prompt}' in {active_reg}. Try a different query or region.")
-
-# Footer
-st.markdown("---")
-st.markdown(
-    """
-    <div class="footer">
-        <p>🎥 Foundry Vantage - Enterprise Content Intelligence Platform | v3.0</p>
-        <p style='font-size: 12px;'>© 2024 Foundry. All rights reserved. | 
-        <a href="#" style='color: white; text-decoration: none;'>Privacy</a> | 
-        <a href="#" style='color: white; text-decoration: none;'>Terms</a> | 
-        <a href="#" style='color: white; text-decoration: none;'>Support</a></p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+# ============================================================================
+# Charting Functions
+# ============================================================================
 
 def create_enhanced_chart(df, chart_type, title, region):
     """Create enhanced visualizations with better styling"""
@@ -1010,3 +491,532 @@ def create_dashboard_overview(df, region):
         return fig_gauge
     
     return None
+
+# ============================================================================
+# Sidebar
+# ============================================================================
+
+with st.sidebar:
+    st.image("https://via.placeholder.com/200x80/667eea/ffffff?text=FOUNDRY+VANTAGE", width=200)
+    
+    # User profile section
+    with st.expander("👤 User Profile", expanded=False):
+        st.text_input("Name", value="John Doe", key="user_name")
+        st.text_input("Email", value="john.doe@foundry.com", key="user_email")
+        st.selectbox("Role", ["Executive", "Analyst", "Manager", "Operator"], key="user_role")
+    
+    st.markdown("---")
+    
+    # Main controls in columns
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("### 🎯 Market")
+        market_options = ["NA", "APAC", "EMEA", "LATAM", "Global"]
+        st.session_state.current_region = st.selectbox(
+            "Region",
+            market_options,
+            index=market_options.index(st.session_state.current_region) if st.session_state.current_region in market_options else 1,
+            key="region_selector",
+            label_visibility="collapsed"
+        )
+    
+    with col2:
+        st.markdown("### 👤 Persona")
+        persona_options = ["Leadership", "Product", "Operations", "Finance", "Analytics"]
+        st.session_state.persona = st.selectbox(
+            "View as",
+            persona_options,
+            index=persona_options.index(st.session_state.persona) if st.session_state.persona in persona_options else 2,
+            key="persona_selector",
+            label_visibility="collapsed"
+        )
+    
+    # Quick stats
+    st.markdown("### 📊 Quick Stats")
+    stats_col1, stats_col2, stats_col3 = st.columns(3)
+    with stats_col1:
+        st.metric("Deals", f"{st.session_state.db_stats.get('deals', 0):,}", "+12%")
+    with stats_col2:
+        st.metric("Vendors", f"{st.session_state.db_stats.get('vendors', 0):,}", "+3")
+    with stats_col3:
+        st.metric("Content", f"{st.session_state.db_stats.get('content_planning', 0):,}", "+8%")
+    
+    st.markdown("---")
+    
+    # Persona-specific quick actions
+    st.markdown(f"### 💡 {st.session_state.persona} Quick Actions")
+    
+    def get_persona_actions(persona, reg):
+        """Get persona-specific suggested queries"""
+        actions = {
+            "Leadership": [
+                ("📈 Executive Dashboard", f"Show executive dashboard for {reg}"),
+                ("💰 Revenue Analysis", f"Revenue breakdown by region {reg}"),
+                ("🎯 Strategic Deals", f"Top 10 strategic deals in {reg}"),
+                ("📊 Market Overview", f"Market performance overview for {reg}")
+            ],
+            "Product": [
+                ("🎬 Rights Analysis", f"SVOD vs AVOD rights in {reg}"),
+                ("📺 Genre Performance", f"Content performance by genre in {reg}"),
+                ("🆕 Release Pipeline", f"Upcoming releases in {reg}"),
+                ("📈 Content Demand", f"Content demand forecast for {reg}")
+            ],
+            "Operations": [
+                ("⚡ Work Order Status", f"Work order status breakdown for {reg}"),
+                ("⏰ Delayed Tasks", f"Delayed work orders in {reg}"),
+                ("👥 Vendor Performance", f"Vendor quality metrics for {reg}"),
+                ("📋 Resource Allocation", f"Resource allocation by vendor in {reg}")
+            ],
+            "Finance": [
+                ("💰 Deal Value Analysis", f"Deal value distribution in {reg}"),
+                ("📊 Vendor Spend", f"Total spend per vendor in {reg}"),
+                ("💱 Currency Impact", f"Currency impact analysis in {reg}"),
+                ("📈 Budget vs Actual", f"Budget vs actual spend in {reg}")
+            ],
+            "Analytics": [
+                ("📊 Trend Analysis", f"Market trends in {reg}"),
+                ("🔮 Predictive Insights", f"Predictive analytics for {reg}"),
+                ("📈 Correlation Analysis", f"Deal correlations in {reg}"),
+                ("🎯 Anomaly Detection", f"Anomalies in {reg} market")
+            ]
+        }
+        return actions.get(persona, actions["Product"])
+    
+    # Display action buttons with unique keys
+    for idx, (action_label, action_query) in enumerate(get_persona_actions(st.session_state.persona, st.session_state.current_region)):
+        if st.button(action_label, key=f"action_{idx}_{action_label[:10]}", use_container_width=True):
+            st.session_state.pending_prompt = action_query
+            st.rerun()
+    
+    st.markdown("---")
+    
+    # Favorites section
+    st.markdown("### ⭐ Favorite Queries")
+    if st.session_state.favorite_queries:
+        for i, fav in enumerate(st.session_state.favorite_queries[-5:]):
+            if st.button(f"📌 {fav[:30]}...", key=f"fav_{i}_{fav[:10]}", use_container_width=True):
+                st.session_state.pending_prompt = fav
+                st.rerun()
+    else:
+        st.info("No favorites yet. Click ★ to save queries.")
+    
+    if st.button("➕ Add Current to Favorites", key="add_fav", use_container_width=True):
+        if st.session_state.chat_history:
+            last_query = st.session_state.chat_history[-1]["question"]
+            if last_query not in st.session_state.favorite_queries:
+                st.session_state.favorite_queries.append(last_query)
+                st.success("✅ Added to favorites!")
+                time.sleep(1)
+                st.rerun()
+    
+    st.markdown("---")
+    
+    # Settings
+    with st.expander("⚙️ Settings", expanded=False):
+        st.session_state.user_preferences['show_sql'] = st.toggle("Show SQL Queries", value=st.session_state.user_preferences['show_sql'])
+        st.session_state.user_preferences['auto_refresh'] = st.toggle("Auto-refresh Data", value=st.session_state.user_preferences['auto_refresh'])
+        if st.session_state.user_preferences['auto_refresh']:
+            st.session_state.user_preferences['refresh_interval'] = st.slider("Refresh Interval (s)", 60, 3600, 300, step=60)
+        
+        st.selectbox("Default Chart Type", ["auto", "bar", "line", "pie", "area", "heatmap"], 
+                    key="default_chart_type")
+
+# ============================================================================
+# Main Content Area
+# ============================================================================
+
+st.title(f"🎥 Foundry Vantage - {st.session_state.persona} Intelligence")
+st.markdown(f"### {st.session_state.current_region} Market Analysis • {st.session_state.date_range}")
+
+# Create tabs for different views
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Analytics", "📈 Insights", "🔮 Predictions", "📋 Reports"])
+
+with tab1:
+    # Analytics view - will be filled by chat responses
+    pass
+
+with tab2:
+    # Insights view
+    st.markdown("### 📊 Key Insights")
+    
+    if st.session_state.chat_history:
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            with st.container():
+                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                st.metric(
+                    "Total Queries",
+                    len(st.session_state.chat_history),
+                    "+2 today",
+                    delta_color="normal"
+                )
+                st.markdown('</div>', unsafe_allow_html=True)
+        
+        with col2:
+            with st.container():
+                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                total_records = sum(len(msg["data"]) for msg in st.session_state.chat_history if "data" in msg)
+                st.metric("Records Analyzed", f"{total_records:,}", "+1.2K")
+                st.markdown('</div>', unsafe_allow_html=True)
+        
+        with col3:
+            with st.container():
+                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                st.metric("Avg Response", "0.8s", "-0.2s")
+                st.markdown('</div>', unsafe_allow_html=True)
+        
+        with col4:
+            with st.container():
+                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                st.metric("Success Rate", "98%", "+2%")
+                st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.info("👆 Start by asking a question in the chat below!")
+
+with tab3:
+    # Predictions view
+    st.markdown("### 🔮 Market Predictions")
+    
+    # Sample prediction widgets
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("📈 Revenue Forecast")
+        
+        # Create sample forecast data
+        dates = pd.date_range(start=datetime.now(), periods=12, freq='ME')
+        forecast = np.random.normal(1000000, 200000, 12).cumsum()
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=dates,
+            y=forecast,
+            mode='lines+markers',
+            name='Forecast',
+            line=dict(color='#667eea', width=3),
+            fill='tozeroy',
+            fillcolor='rgba(102,126,234,0.1)'
+        ))
+        
+        fig.update_layout(
+            title="12-Month Revenue Forecast",
+            xaxis_title="Month",
+            yaxis_title="Revenue ($)",
+            height=400,
+            margin=dict(t=50, l=50, r=30, b=50),
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)'
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("🎯 Risk Assessment")
+        
+        # Sample risk metrics
+        risk_data = pd.DataFrame({
+            'Category': ['Market Risk', 'Operational Risk', 'Financial Risk', 'Compliance Risk'],
+            'Score': [65, 42, 78, 35],
+            'Threshold': [70, 50, 80, 40]
+        })
+        
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=risk_data['Category'],
+            y=risk_data['Score'],
+            name='Current Score',
+            marker_color='#667eea'
+        ))
+        fig.add_trace(go.Scatter(
+            x=risk_data['Category'],
+            y=risk_data['Threshold'],
+            name='Threshold',
+            mode='lines+markers',
+            line=dict(color='red', width=2, dash='dash')
+        ))
+        
+        fig.update_layout(
+            title="Risk Assessment Scores",
+            yaxis_title="Risk Score",
+            height=400,
+            margin=dict(t=50, l=50, r=30, b=50),
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)'
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+with tab4:
+    # Reports view
+    st.markdown("### 📋 Saved Reports")
+    
+    reports = [
+        {"name": "Monthly Deal Summary", "date": "2024-03-01", "type": "PDF", "size": "2.3 MB"},
+        {"name": "Vendor Performance Q1", "date": "2024-02-28", "type": "Excel", "size": "1.1 MB"},
+        {"name": "Content Rights Analysis", "date": "2024-02-25", "type": "PDF", "size": "3.7 MB"},
+        {"name": "Work Order Efficiency", "date": "2024-02-20", "type": "CSV", "size": "0.8 MB"},
+    ]
+    
+    for i, report in enumerate(reports):
+        col1, col2, col3, col4, col5 = st.columns([3, 2, 1, 1, 1])
+        with col1:
+            st.write(f"📄 {report['name']}")
+        with col2:
+            st.write(report['date'])
+        with col3:
+            st.write(report['type'])
+        with col4:
+            st.write(report['size'])
+        with col5:
+            st.button("📥", key=f"download_report_{i}", use_container_width=True)
+
+# ============================================================================
+# Chat Interface
+# ============================================================================
+
+# Chat input
+user_input = st.chat_input("Ask anything about deals, vendors, content, or market performance...")
+
+# Process pending prompts or new input
+active_prompt = None
+if st.session_state.get('pending_prompt'):
+    active_prompt = st.session_state.pending_prompt
+    del st.session_state.pending_prompt
+elif user_input:
+    active_prompt = user_input
+
+# Update region from query
+if active_prompt:
+    for r in ["NA", "APAC", "EMEA", "LATAM"]:
+        if r.lower() in active_prompt.lower():
+            st.session_state.current_region = r
+            break
+
+# Display chat history
+for i, msg in enumerate(st.session_state.chat_history):
+    with st.chat_message("user"):
+        st.markdown(f"**{msg['question']}**")
+    
+    with st.chat_message("assistant", avatar="🎥"):
+        st.markdown(msg.get("answer", "Here are the results:"))
+        
+        # Display metrics if available
+        if msg.get("metrics"):
+            metrics_cols = st.columns(len(msg["metrics"]))
+            for col, metric in zip(metrics_cols, msg["metrics"]):
+                with col:
+                    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                    st.metric(metric["label"], metric["value"])
+                    st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Display chart
+        if msg.get("chart"):
+            st.plotly_chart(msg["chart"], use_container_width=True, key=f"chart_{i}_{time.time()}")
+        
+        # Enterprise actions
+        with st.expander("📊 Enterprise Actions & Data Export", expanded=False):
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                tab_name = st.text_input(
+                    "Report Name", 
+                    value=f"Foundry_{st.session_state.current_region}_{datetime.now().strftime('%Y%m%d')}",
+                    key=f"tab_name_{i}"
+                )
+            with col2:
+                if st.button("🚀 Push to Tableau", key=f"push_{i}", use_container_width=True):
+                    with st.spinner("Pushing to Tableau..."):
+                        # Placeholder for Tableau sync function
+                        st.info("Tableau integration coming soon!")
+                        time.sleep(1)
+            
+            # Export options
+            col3, col4, col5 = st.columns(3)
+            with col3:
+                csv = msg["data"].to_csv(index=False)
+                st.download_button(
+                    "📥 Download CSV",
+                    csv,
+                    f"{tab_name}.csv",
+                    "text/csv",
+                    key=f"download_csv_{i}",
+                    use_container_width=True
+                )
+            with col4:
+                st.button("📊 Export to Excel", key=f"excel_{i}", use_container_width=True)
+            with col5:
+                st.button("📧 Email Report", key=f"email_{i}", use_container_width=True)
+            
+            # Data preview
+            st.markdown("##### Data Preview")
+            st.dataframe(
+                msg["data"],
+                use_container_width=True,
+                height=300,
+                column_config={
+                    "deal_value": st.column_config.NumberColumn("Deal Value", format="$%.2f"),
+                    "vendor_rating": st.column_config.NumberColumn("Rating", format="%.1f ⭐")
+                }
+            )
+
+# Process new query
+if active_prompt:
+    with st.chat_message("user"):
+        st.markdown(f"**{active_prompt}**")
+    
+    with st.chat_message("assistant", avatar="🎥"):
+        active_reg = st.session_state.current_region
+        
+        with st.spinner(f"🔍 Analyzing {active_reg} market data..."):
+            sql, error, chart_type = parse_query(active_prompt, active_reg)
+            
+            if error:
+                st.error(f"❌ Query parsing error: {error}")
+            else:
+                # Show SQL if enabled in preferences
+                if st.session_state.user_preferences['show_sql']:
+                    with st.expander("View SQL Query", expanded=False):
+                        st.code(sql, language="sql")
+                
+                res_df, db_err = execute_sql(sql, DB_CONN)
+                
+                if res_df is not None and not res_df.empty:
+                    # Create enhanced chart based on data
+                    fig = create_enhanced_chart(res_df, chart_type, active_prompt, active_reg)
+                    
+                    # Calculate metrics
+                    metrics_data = []
+                    if any(col in res_df.columns for col in ["deal_value", "total_value", "value", "budget", "cost"]):
+                        val_col = next(col for col in ["deal_value", "total_value", "value", "budget", "cost"] if col in res_df.columns)
+                        
+                        # Calculate key metrics
+                        total = res_df[val_col].sum()
+                        avg = res_df[val_col].mean()
+                        count = len(res_df)
+                        max_val = res_df[val_col].max()
+                        
+                        # Display metrics in a grid
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                            st.metric("Total Value", f"${total:,.0f}")
+                            st.markdown('</div>', unsafe_allow_html=True)
+                        with col2:
+                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                            st.metric("Average Value", f"${avg:,.0f}")
+                            st.markdown('</div>', unsafe_allow_html=True)
+                        with col3:
+                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                            st.metric("Record Count", f"{count:,}")
+                            st.markdown('</div>', unsafe_allow_html=True)
+                        with col4:
+                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                            st.metric("Maximum", f"${max_val:,.0f}")
+                            st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        metrics_data = [
+                            {"label": "Total Value", "value": f"${total:,.0f}"},
+                            {"label": "Average Value", "value": f"${avg:,.0f}"},
+                            {"label": "Record Count", "value": f"{count:,}"},
+                            {"label": "Maximum", "value": f"${max_val:,.0f}"}
+                        ]
+                    
+                    # Display the main chart
+                    st.plotly_chart(fig, use_container_width=True, key=f"new_chart_{time.time()}")
+                    
+                    # Enterprise actions
+                    with st.expander("📊 Enterprise Actions & Data Export", expanded=True):
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            live_tab_name = st.text_input(
+                                "Report Name",
+                                value=f"Foundry_{active_reg}_{datetime.now().strftime('%Y%m%d_%H%M')}",
+                                key="live_tab_name"
+                            )
+                        with col2:
+                            if st.button("🚀 Push to Tableau", key="live_push", use_container_width=True):
+                                with st.spinner("Pushing to Tableau..."):
+                                    # Placeholder for Tableau sync function
+                                    st.info("Tableau integration coming soon!")
+                                    time.sleep(1)
+                        
+                        # Data preview with enhanced formatting
+                        st.markdown("##### Detailed Data View")
+                        
+                        # Format currency columns
+                        display_df = res_df.copy()
+                        for col in display_df.columns:
+                            if 'value' in col.lower() or 'price' in col.lower() or 'budget' in col.lower() or 'cost' in col.lower():
+                                display_df[col] = display_df[col].apply(lambda x: f"${x:,.2f}" if pd.notnull(x) else x)
+                        
+                        st.dataframe(
+                            display_df,
+                            use_container_width=True,
+                            height=400,
+                            column_config={
+                                "deal_date": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
+                                "vendor_rating": st.column_config.NumberColumn("Rating", format="%.1f ⭐")
+                            }
+                        )
+                        
+                        # Download options
+                        col3, col4, col5 = st.columns(3)
+                        with col3:
+                            csv = res_df.to_csv(index=False)
+                            st.download_button(
+                                "📥 Download as CSV",
+                                csv,
+                                f"{live_tab_name}.csv",
+                                "text/csv",
+                                use_container_width=True,
+                                key="download_csv_live"
+                            )
+                        with col4:
+                            st.button("📊 Export to Excel", key="excel_export_live", use_container_width=True)
+                        with col5:
+                            st.button("📧 Schedule Report", key="schedule_report_live", use_container_width=True)
+                    
+                    # Add to chat history
+                    st.session_state.chat_history.append({
+                        "question": active_prompt,
+                        "answer": f"📊 Analysis for {active_reg} market complete. Here are the key insights:",
+                        "data": res_df,
+                        "chart": fig,
+                        "metrics": metrics_data
+                    })
+                    
+                    # Auto-scroll to bottom
+                    components.html(
+                        """
+                        <script>
+                        window.parent.document.querySelector('section.main').scrollTo({
+                            top: window.parent.document.querySelector('section.main').scrollHeight,
+                            behavior: 'smooth'
+                        });
+                        </script>
+                        """,
+                        height=0
+                    )
+                    
+                    st.rerun()
+                else:
+                    st.warning(f"ℹ️ No records found for '{active_prompt}' in {active_reg}. Try a different query or region.")
+
+# Footer
+st.markdown("---")
+st.markdown(
+    """
+    <div class="footer">
+        <p>🎥 Foundry Vantage - Enterprise Content Intelligence Platform | v3.0</p>
+        <p style='font-size: 12px;'>© 2024 Foundry. All rights reserved. | 
+        <a href="#" style='color: white; text-decoration: none;'>Privacy</a> | 
+        <a href="#" style='color: white; text-decoration: none;'>Terms</a> | 
+        <a href="#" style='color: white; text-decoration: none;'>Support</a></p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
