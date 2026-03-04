@@ -112,6 +112,19 @@ st.markdown("""
         box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
     }
     
+    /* SQL Query box styling */
+    .sql-query-box {
+        background-color: #1e1e1e;
+        color: #d4d4d4;
+        border-radius: 10px;
+        padding: 15px;
+        font-family: 'Courier New', monospace;
+        font-size: 14px;
+        border-left: 4px solid #667eea;
+        margin: 10px 0;
+        overflow-x: auto;
+    }
+    
     /* Tab styling */
     .stTabs [data-baseweb="tab-list"] {
         gap: 10px;
@@ -151,6 +164,17 @@ st.markdown("""
         padding: 30px;
         color: rgba(255,255,255,0.8);
         font-size: 14px;
+    }
+    
+    /* Region indicator */
+    .region-indicator {
+        display: inline-block;
+        padding: 5px 15px;
+        border-radius: 20px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        font-weight: 600;
+        margin-right: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -192,11 +216,13 @@ def init_session_state():
         'user_preferences': {
             'theme': 'light',
             'default_chart_type': 'auto',
-            'show_sql': False,
+            'show_sql': True,  # Default to True now
             'auto_refresh': False,
             'refresh_interval': 300
         },
-        'db_stats': {}
+        'db_stats': {},
+        'last_query_sql': None,
+        'last_query_error': None
     }
     
     for key, value in defaults.items():
@@ -215,6 +241,26 @@ except Exception as e:
     st.stop()
 
 # ============================================================================
+# Helper Functions
+# ============================================================================
+
+def format_currency_value(x):
+    """Safely format currency values"""
+    try:
+        if pd.isna(x) or x is None:
+            return "N/A"
+        # Convert to float if it's a string
+        if isinstance(x, str):
+            x = float(x.replace(',', '').replace('$', ''))
+        return f"${float(x):,.0f}"
+    except (ValueError, TypeError):
+        return str(x)
+
+def safe_apply_format(series, formatter):
+    """Safely apply formatting to a series"""
+    return series.apply(lambda x: formatter(x) if pd.notnull(x) else "N/A")
+
+# ============================================================================
 # Charting Functions
 # ============================================================================
 
@@ -223,10 +269,24 @@ def create_enhanced_chart(df, chart_type, title, region):
     
     colors = px.colors.qualitative.Set3
     
+    # Safely get columns
+    if len(df.columns) == 0:
+        return go.Figure()
+    
+    x_col = df.columns[0]
+    y_col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
+    
+    # Convert to numeric for y-axis if possible
+    if y_col in df.columns:
+        try:
+            df[y_col] = pd.to_numeric(df[y_col], errors='coerce')
+        except:
+            pass
+    
     if chart_type == "pie":
         fig = go.Figure(data=[go.Pie(
-            labels=df[df.columns[0]],
-            values=df[df.columns[1]] if len(df.columns) > 1 else [1] * len(df),
+            labels=df[x_col],
+            values=df[y_col] if len(df.columns) > 1 else [1] * len(df),
             hole=0.4,
             marker=dict(colors=colors, line=dict(color='white', width=2)),
             textinfo='label+percent',
@@ -260,12 +320,23 @@ def create_enhanced_chart(df, chart_type, title, region):
         )
         
     elif chart_type == "bar":
+        # Create text labels safely
+        text_values = []
+        for val in df[y_col]:
+            try:
+                if pd.notnull(val) and isinstance(val, (int, float)):
+                    text_values.append(f"${val:,.0f}" if val > 1000 else f"{val:,.0f}")
+                else:
+                    text_values.append(str(val))
+            except:
+                text_values.append(str(val))
+        
         fig = go.Figure(data=[
             go.Bar(
-                x=df[df.columns[0]],
-                y=df[df.columns[1]],
+                x=df[x_col],
+                y=df[y_col],
                 marker_color=colors,
-                text=df[df.columns[1]].apply(lambda x: f'${x:,.0f}' if x > 1000 else f'{x:,.0f}'),
+                text=text_values,
                 textposition='outside',
                 textfont=dict(size=12, color='#1e3c72'),
                 hovertemplate="<b>%{x}</b><br>" +
@@ -273,6 +344,9 @@ def create_enhanced_chart(df, chart_type, title, region):
                              "<extra></extra>"
             )
         ])
+        
+        # Determine if we should show dollar signs
+        has_currency = any(col in df.columns for col in ["deal_value", "total_value", "budget", "cost"])
         
         fig.update_layout(
             title={
@@ -293,7 +367,7 @@ def create_enhanced_chart(df, chart_type, title, region):
                 title="Value",
                 tickfont=dict(size=12),
                 gridcolor='rgba(0,0,0,0.1)',
-                tickprefix="$" if any(col in df.columns for col in ["deal_value", "total_value"]) else ""
+                tickprefix="$" if has_currency else ""
             ),
             margin=dict(t=100, l=80, r=30, b=100),
             paper_bgcolor='rgba(0,0,0,0)',
@@ -304,8 +378,8 @@ def create_enhanced_chart(df, chart_type, title, region):
     elif chart_type == "line":
         fig = go.Figure(data=[
             go.Scatter(
-                x=df[df.columns[0]],
-                y=df[df.columns[1]],
+                x=df[x_col],
+                y=df[y_col],
                 mode='lines+markers',
                 line=dict(color='#1e3c72', width=3),
                 marker=dict(size=8, color='#ff6b6b'),
@@ -313,6 +387,8 @@ def create_enhanced_chart(df, chart_type, title, region):
                 fillcolor='rgba(30,60,114,0.1)'
             )
         ])
+        
+        has_currency = any(col in df.columns for col in ["deal_value", "total_value", "budget", "cost"])
         
         fig.update_layout(
             title={
@@ -332,16 +408,15 @@ def create_enhanced_chart(df, chart_type, title, region):
                 title="Value",
                 tickfont=dict(size=12),
                 gridcolor='rgba(0,0,0,0.1)',
-                tickprefix="$" if any(col in df.columns for col in ["deal_value", "total_value"]) else ""
+                tickprefix="$" if has_currency else ""
             ),
             margin=dict(t=100, l=80, r=30, b=50),
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)'
         )
         
-    elif chart_type == "heatmap":
-        # Create correlation matrix or pivot table
-        if len(df.columns) >= 3:
+    elif chart_type == "heatmap" and len(df.columns) >= 3:
+        try:
             pivot_df = df.pivot_table(
                 index=df.columns[0],
                 columns=df.columns[1],
@@ -378,14 +453,14 @@ def create_enhanced_chart(df, chart_type, title, region):
                 paper_bgcolor='rgba(0,0,0,0)',
                 plot_bgcolor='rgba(0,0,0,0)'
             )
-        else:
+        except:
             fig = create_enhanced_chart(df, "bar", title, region)
     
     elif chart_type == "area":
         fig = go.Figure(data=[
             go.Scatter(
-                x=df[df.columns[0]],
-                y=df[df.columns[1]],
+                x=df[x_col],
+                y=df[y_col],
                 mode='lines',
                 line=dict(width=0.5, color='rgb(30,60,114)'),
                 fill='tonexty',
@@ -393,6 +468,8 @@ def create_enhanced_chart(df, chart_type, title, region):
                 name='Value'
             )
         ])
+        
+        has_currency = any(col in df.columns for col in ["deal_value", "total_value", "budget", "cost"])
         
         fig.update_layout(
             title={
@@ -406,7 +483,7 @@ def create_enhanced_chart(df, chart_type, title, region):
             xaxis=dict(tickfont=dict(size=12)),
             yaxis=dict(
                 tickfont=dict(size=12),
-                tickprefix="$" if any(col in df.columns for col in ["deal_value", "total_value"]) else ""
+                tickprefix="$" if has_currency else ""
             ),
             margin=dict(t=100, l=80, r=30, b=50),
             paper_bgcolor='rgba(0,0,0,0)',
@@ -423,72 +500,80 @@ def create_dashboard_overview(df, region):
     """Create an executive dashboard overview"""
     
     # Calculate key metrics
-    if 'deal_value' in df.columns:
-        total_value = df['deal_value'].sum()
-        avg_value = df['deal_value'].mean()
-        max_value = df['deal_value'].max()
-        min_value = df['deal_value'].min()
-        deal_count = len(df)
-        
-        # Create gauge charts for KPIs
-        fig_gauge = make_subplots(
-            rows=1, cols=3,
-            specs=[[{'type': 'indicator'}, {'type': 'indicator'}, {'type': 'indicator'}]],
-            subplot_titles=('Total Value', 'Average Value', 'Deal Count')
-        )
-        
-        fig_gauge.add_trace(
-            go.Indicator(
-                mode="number+gauge+delta",
-                value=total_value,
-                title={"text": "Total Value"},
-                delta={'reference': 10000000},
-                gauge={
-                    'axis': {'range': [None, total_value * 1.5]},
-                    'bar': {'color': "#1e3c72"},
-                    'steps': [
-                        {'range': [0, total_value * 0.5], 'color': "lightgray"},
-                        {'range': [total_value * 0.5, total_value], 'color': "gray"}
-                    ],
-                    'threshold': {
-                        'line': {'color': "red", 'width': 4},
-                        'thickness': 0.75,
-                        'value': total_value * 0.9
-                    }
-                },
-                number={'prefix': "$", 'font': {'size': 20}}
-            ),
-            row=1, col=1
-        )
-        
-        fig_gauge.add_trace(
-            go.Indicator(
-                mode="number",
-                value=avg_value,
-                title={"text": "Average Value"},
-                number={'prefix': "$", 'font': {'size': 20}}
-            ),
-            row=1, col=2
-        )
-        
-        fig_gauge.add_trace(
-            go.Indicator(
-                mode="number",
-                value=deal_count,
-                title={"text": "Deal Count"},
-                number={'font': {'size': 20}}
-            ),
-            row=1, col=3
-        )
-        
-        fig_gauge.update_layout(
-            height=250,
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            margin=dict(t=50, l=30, r=30, b=30)
-        )
-        
-        return fig_gauge
+    value_cols = [col for col in df.columns if any(x in col.lower() for x in ['value', 'total', 'budget', 'cost'])]
+    
+    if value_cols:
+        val_col = value_cols[0]
+        try:
+            df[val_col] = pd.to_numeric(df[val_col], errors='coerce')
+            
+            total_value = df[val_col].sum()
+            avg_value = df[val_col].mean()
+            max_value = df[val_col].max()
+            min_value = df[val_col].min()
+            record_count = len(df)
+            
+            # Create gauge charts for KPIs
+            fig_gauge = make_subplots(
+                rows=1, cols=3,
+                specs=[[{'type': 'indicator'}, {'type': 'indicator'}, {'type': 'indicator'}]],
+                subplot_titles=('Total Value', 'Average Value', 'Record Count')
+            )
+            
+            fig_gauge.add_trace(
+                go.Indicator(
+                    mode="number+gauge+delta",
+                    value=total_value if pd.notnull(total_value) else 0,
+                    title={"text": "Total Value"},
+                    delta={'reference': total_value * 0.8 if total_value else 0},
+                    gauge={
+                        'axis': {'range': [None, total_value * 1.5 if total_value else 100]},
+                        'bar': {'color': "#1e3c72"},
+                        'steps': [
+                            {'range': [0, total_value * 0.5 if total_value else 50], 'color': "lightgray"},
+                            {'range': [total_value * 0.5 if total_value else 50, total_value if total_value else 100], 'color': "gray"}
+                        ],
+                        'threshold': {
+                            'line': {'color': "red", 'width': 4},
+                            'thickness': 0.75,
+                            'value': total_value * 0.9 if total_value else 90
+                        }
+                    },
+                    number={'prefix': "$", 'font': {'size': 20}}
+                ),
+                row=1, col=1
+            )
+            
+            fig_gauge.add_trace(
+                go.Indicator(
+                    mode="number",
+                    value=avg_value if pd.notnull(avg_value) else 0,
+                    title={"text": "Average Value"},
+                    number={'prefix': "$", 'font': {'size': 20}}
+                ),
+                row=1, col=2
+            )
+            
+            fig_gauge.add_trace(
+                go.Indicator(
+                    mode="number",
+                    value=record_count,
+                    title={"text": "Record Count"},
+                    number={'font': {'size': 20}}
+                ),
+                row=1, col=3
+            )
+            
+            fig_gauge.update_layout(
+                height=250,
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                margin=dict(t=50, l=30, r=30, b=30)
+            )
+            
+            return fig_gauge
+        except:
+            return None
     
     return None
 
@@ -511,14 +596,17 @@ with st.sidebar:
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("### 🎯 Market")
-        market_options = ["NA", "APAC", "EMEA", "LATAM", "Global"]
-        st.session_state.current_region = st.selectbox(
+        market_options = ["NA", "APAC", "EMEA", "LATAM"]
+        selected_region = st.selectbox(
             "Region",
             market_options,
             index=market_options.index(st.session_state.current_region) if st.session_state.current_region in market_options else 1,
             key="region_selector",
             label_visibility="collapsed"
         )
+        # Only update if different from current
+        if selected_region != st.session_state.current_region:
+            st.session_state.current_region = selected_region
     
     with col2:
         st.markdown("### 👤 Persona")
@@ -543,6 +631,14 @@ with st.sidebar:
     
     st.markdown("---")
     
+    # Active filters indicator
+    st.markdown(f"""
+        <div style="background: rgba(102,126,234,0.1); padding: 10px; border-radius: 10px; margin-bottom: 10px;">
+            <span class="region-indicator">{st.session_state.current_region}</span>
+            <span style="color: #666;">Active Filter</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
     # Persona-specific quick actions
     st.markdown(f"### 💡 {st.session_state.persona} Quick Actions")
     
@@ -556,7 +652,7 @@ with st.sidebar:
                 ("📊 Market Overview", f"Market performance overview for {reg}")
             ],
             "Product": [
-                ("🎬 Rights Analysis", f"SVOD vs AVOD rights in {reg}"),
+                ("🎬 Rights Analysis", f"SVOD rights breakdown in {reg}"),
                 ("📺 Genre Performance", f"Content performance by genre in {reg}"),
                 ("🆕 Release Pipeline", f"Upcoming releases in {reg}"),
                 ("📈 Content Demand", f"Content demand forecast for {reg}")
@@ -625,8 +721,18 @@ with st.sidebar:
 # Main Content Area
 # ============================================================================
 
-st.title(f"🎥 Foundry Vantage - {st.session_state.persona} Intelligence")
-st.markdown(f"### {st.session_state.current_region} Market Analysis • {st.session_state.date_range}")
+# Header with region indicator
+col1, col2 = st.columns([3, 1])
+with col1:
+    st.title(f"🎥 Foundry Vantage - {st.session_state.persona} Intelligence")
+with col2:
+    st.markdown(f"""
+        <div style="text-align: right; padding: 10px;">
+            <span class="region-indicator">{st.session_state.current_region}</span>
+        </div>
+    """, unsafe_allow_html=True)
+
+st.markdown(f"### {st.session_state.date_range} Analysis")
 
 # Create tabs for different views
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Analytics", "📈 Insights", "🔮 Predictions", "📋 Reports"])
@@ -701,7 +807,7 @@ with tab3:
         ))
         
         fig.update_layout(
-            title="12-Month Revenue Forecast",
+            title=f"12-Month Revenue Forecast - {st.session_state.current_region}",
             xaxis_title="Month",
             yaxis_title="Revenue ($)",
             height=400,
@@ -740,7 +846,7 @@ with tab3:
         ))
         
         fig.update_layout(
-            title="Risk Assessment Scores",
+            title=f"Risk Assessment - {st.session_state.current_region}",
             yaxis_title="Risk Score",
             height=400,
             margin=dict(t=50, l=50, r=30, b=50),
@@ -756,10 +862,10 @@ with tab4:
     st.markdown("### 📋 Saved Reports")
     
     reports = [
-        {"name": "Monthly Deal Summary", "date": "2024-03-01", "type": "PDF", "size": "2.3 MB"},
-        {"name": "Vendor Performance Q1", "date": "2024-02-28", "type": "Excel", "size": "1.1 MB"},
-        {"name": "Content Rights Analysis", "date": "2024-02-25", "type": "PDF", "size": "3.7 MB"},
-        {"name": "Work Order Efficiency", "date": "2024-02-20", "type": "CSV", "size": "0.8 MB"},
+        {"name": f"Monthly Deal Summary - {st.session_state.current_region}", "date": "2024-03-01", "type": "PDF", "size": "2.3 MB"},
+        {"name": f"Vendor Performance Q1 - {st.session_state.current_region}", "date": "2024-02-28", "type": "Excel", "size": "1.1 MB"},
+        {"name": f"Content Rights Analysis - {st.session_state.current_region}", "date": "2024-02-25", "type": "PDF", "size": "3.7 MB"},
+        {"name": f"Work Order Efficiency - {st.session_state.current_region}", "date": "2024-02-20", "type": "CSV", "size": "0.8 MB"},
     ]
     
     for i, report in enumerate(reports):
@@ -790,12 +896,19 @@ if st.session_state.get('pending_prompt'):
 elif user_input:
     active_prompt = user_input
 
-# Update region from query
+# Update region from query - but don't override if user explicitly selected different region
 if active_prompt:
+    detected_region = None
     for r in ["NA", "APAC", "EMEA", "LATAM"]:
         if r.lower() in active_prompt.lower():
-            st.session_state.current_region = r
+            detected_region = r
             break
+    
+    # Only update if region detected AND it's different from current
+    if detected_region and detected_region != st.session_state.current_region:
+        # Show a warning that we're using the detected region
+        st.warning(f"🔍 Detected region '{detected_region}' in your query. Overriding selected region.")
+        st.session_state.current_region = detected_region
 
 # Display chat history
 for i, msg in enumerate(st.session_state.chat_history):
@@ -804,6 +917,11 @@ for i, msg in enumerate(st.session_state.chat_history):
     
     with st.chat_message("assistant", avatar="🎥"):
         st.markdown(msg.get("answer", "Here are the results:"))
+        
+        # Show SQL if available and enabled
+        if msg.get("sql") and st.session_state.user_preferences['show_sql']:
+            with st.expander("🔍 View SQL Query", expanded=False):
+                st.markdown(f'<div class="sql-query-box">{msg["sql"]}</div>', unsafe_allow_html=True)
         
         # Display metrics if available
         if msg.get("metrics"):
@@ -824,13 +942,12 @@ for i, msg in enumerate(st.session_state.chat_history):
             with col1:
                 tab_name = st.text_input(
                     "Report Name", 
-                    value=f"Foundry_{st.session_state.current_region}_{datetime.now().strftime('%Y%m%d')}",
+                    value=f"Foundry_{msg.get('region', st.session_state.current_region)}_{datetime.now().strftime('%Y%m%d')}",
                     key=f"tab_name_{i}"
                 )
             with col2:
                 if st.button("🚀 Push to Tableau", key=f"push_{i}", use_container_width=True):
                     with st.spinner("Pushing to Tableau..."):
-                        # Placeholder for Tableau sync function
                         st.info("Tableau integration coming soon!")
                         time.sleep(1)
             
@@ -879,51 +996,63 @@ if active_prompt:
             else:
                 # Show SQL if enabled in preferences
                 if st.session_state.user_preferences['show_sql']:
-                    with st.expander("View SQL Query", expanded=False):
-                        st.code(sql, language="sql")
+                    with st.expander("🔍 View SQL Query", expanded=True):
+                        st.markdown(f'<div class="sql-query-box">{sql}</div>', unsafe_allow_html=True)
                 
                 res_df, db_err = execute_sql(sql, DB_CONN)
                 
                 if res_df is not None and not res_df.empty:
+                    # Verify region filtering
+                    if 'region' in res_df.columns:
+                        unique_regions = res_df['region'].unique()
+                        if len(unique_regions) == 1 and unique_regions[0] != active_reg:
+                            st.warning(f"⚠️ Data is filtered for '{unique_regions[0]}' but you have '{active_reg}' selected.")
+                    
                     # Create enhanced chart based on data
                     fig = create_enhanced_chart(res_df, chart_type, active_prompt, active_reg)
                     
                     # Calculate metrics
                     metrics_data = []
-                    if any(col in res_df.columns for col in ["deal_value", "total_value", "value", "budget", "cost"]):
-                        val_col = next(col for col in ["deal_value", "total_value", "value", "budget", "cost"] if col in res_df.columns)
-                        
-                        # Calculate key metrics
-                        total = res_df[val_col].sum()
-                        avg = res_df[val_col].mean()
-                        count = len(res_df)
-                        max_val = res_df[val_col].max()
-                        
-                        # Display metrics in a grid
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                            st.metric("Total Value", f"${total:,.0f}")
-                            st.markdown('</div>', unsafe_allow_html=True)
-                        with col2:
-                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                            st.metric("Average Value", f"${avg:,.0f}")
-                            st.markdown('</div>', unsafe_allow_html=True)
-                        with col3:
-                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                            st.metric("Record Count", f"{count:,}")
-                            st.markdown('</div>', unsafe_allow_html=True)
-                        with col4:
-                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                            st.metric("Maximum", f"${max_val:,.0f}")
-                            st.markdown('</div>', unsafe_allow_html=True)
-                        
-                        metrics_data = [
-                            {"label": "Total Value", "value": f"${total:,.0f}"},
-                            {"label": "Average Value", "value": f"${avg:,.0f}"},
-                            {"label": "Record Count", "value": f"{count:,}"},
-                            {"label": "Maximum", "value": f"${max_val:,.0f}"}
-                        ]
+                    value_cols = [col for col in res_df.columns if any(x in col.lower() for x in ['value', 'total', 'budget', 'cost'])]
+                    
+                    if value_cols:
+                        val_col = value_cols[0]
+                        try:
+                            # Convert to numeric safely
+                            res_df[val_col] = pd.to_numeric(res_df[val_col], errors='coerce')
+                            
+                            total = res_df[val_col].sum()
+                            avg = res_df[val_col].mean()
+                            count = len(res_df)
+                            max_val = res_df[val_col].max()
+                            
+                            # Display metrics in a grid
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                                st.metric("Total Value", f"${total:,.0f}" if pd.notnull(total) else "N/A")
+                                st.markdown('</div>', unsafe_allow_html=True)
+                            with col2:
+                                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                                st.metric("Average Value", f"${avg:,.0f}" if pd.notnull(avg) else "N/A")
+                                st.markdown('</div>', unsafe_allow_html=True)
+                            with col3:
+                                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                                st.metric("Record Count", f"{count:,}")
+                                st.markdown('</div>', unsafe_allow_html=True)
+                            with col4:
+                                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                                st.metric("Maximum", f"${max_val:,.0f}" if pd.notnull(max_val) else "N/A")
+                                st.markdown('</div>', unsafe_allow_html=True)
+                            
+                            metrics_data = [
+                                {"label": "Total Value", "value": f"${total:,.0f}" if pd.notnull(total) else "N/A"},
+                                {"label": "Average Value", "value": f"${avg:,.0f}" if pd.notnull(avg) else "N/A"},
+                                {"label": "Record Count", "value": f"{count:,}"},
+                                {"label": "Maximum", "value": f"${max_val:,.0f}" if pd.notnull(max_val) else "N/A"}
+                            ]
+                        except Exception as e:
+                            logger.error(f"Error calculating metrics: {e}")
                     
                     # Display the main chart
                     st.plotly_chart(fig, use_container_width=True, key=f"new_chart_{time.time()}")
@@ -940,18 +1069,17 @@ if active_prompt:
                         with col2:
                             if st.button("🚀 Push to Tableau", key="live_push", use_container_width=True):
                                 with st.spinner("Pushing to Tableau..."):
-                                    # Placeholder for Tableau sync function
                                     st.info("Tableau integration coming soon!")
                                     time.sleep(1)
                         
                         # Data preview with enhanced formatting
                         st.markdown("##### Detailed Data View")
                         
-                        # Format currency columns
+                        # Format currency columns safely
                         display_df = res_df.copy()
                         for col in display_df.columns:
-                            if 'value' in col.lower() or 'price' in col.lower() or 'budget' in col.lower() or 'cost' in col.lower():
-                                display_df[col] = display_df[col].apply(lambda x: f"${x:,.2f}" if pd.notnull(x) else x)
+                            if any(x in col.lower() for x in ['value', 'price', 'budget', 'cost']):
+                                display_df[col] = safe_apply_format(display_df[col], format_currency_value)
                         
                         st.dataframe(
                             display_df,
@@ -986,7 +1114,9 @@ if active_prompt:
                         "answer": f"📊 Analysis for {active_reg} market complete. Here are the key insights:",
                         "data": res_df,
                         "chart": fig,
-                        "metrics": metrics_data
+                        "metrics": metrics_data,
+                        "sql": sql,
+                        "region": active_reg
                     })
                     
                     # Auto-scroll to bottom
