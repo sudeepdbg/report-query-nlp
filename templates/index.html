@@ -3,176 +3,424 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Foundry Vantage | Intelligence Layer</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <title>Foundry Vantage | Design Reference</title>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
+        /* ── DESIGN TOKENS ── */
         :root {
-            --vantage-blue: #0052CC;
-            --vantage-bg: #F4F5F7;
-            --vantage-sidebar: #091E42;
-            --chat-bubble-user: #EBECF0;
+            --navy:      #091E42;
+            --blue:      #0052CC;
+            --teal:      #00B8D9;
+            --bg:        #F4F5F7;
+            --surface:   #FFFFFF;
+            --border:    #DFE1E6;
+            --text-main: #172B4D;
+            --text-mute: #6B778C;
+            --success:   #36B37E;
+            --warn:      #FFAB00;
+            --danger:    #DE350B;
+            --mono: 'DM Mono', monospace;
+            --sans: 'DM Sans', sans-serif;
         }
 
-        body { font-family: 'Inter', sans-serif; background: var(--vantage-bg); height: 100vh; overflow: hidden; }
-        
-        /* Sidebar Styling */
-        .sidebar { background: var(--vantage-sidebar); color: white; min-height: 100vh; padding: 24px; }
-        .sidebar h3 { font-weight: 600; font-size: 1.25rem; letter-spacing: -0.5px; }
-        .nav-item-custom { 
-            background: rgba(255,255,255,0.05); border-radius: 8px; 
-            padding: 12px; margin-bottom: 8px; cursor: pointer; transition: 0.2s;
-            border: 1px solid transparent;
-        }
-        .nav-item-custom:hover { background: rgba(255,255,255,0.1); }
-        .nav-item-custom.active { background: var(--vantage-blue); border-color: rgba(255,255,255,0.2); }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: var(--sans); background: var(--bg); color: var(--text-main); height: 100vh; overflow: hidden; display: flex; }
 
-        /* Main Chat Area */
-        .chat-container { height: calc(100vh - 180px); overflow-y: auto; padding: 20px; scroll-behavior: smooth; }
-        .message-row { margin-bottom: 24px; display: flex; flex-direction: column; }
-        
-        /* Assistant Bubble */
-        .vantage-bubble {
-            background: white; border-radius: 12px; padding: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05); max-width: 85%;
-            border: 1px solid #DFE1E6; align-self: flex-start;
+        /* ── SIDEBAR ── */
+        .sidebar {
+            width: 260px; min-width: 260px; background: var(--navy);
+            display: flex; flex-direction: column; padding: 24px 16px; gap: 0;
+            border-right: 1px solid rgba(255,255,255,0.06);
         }
-        
-        /* User Bubble */
-        .user-bubble {
-            background: var(--chat-bubble-user); border-radius: 12px; padding: 12px 20px;
-            max-width: 70%; align-self: flex-end; color: #172B4D; font-weight: 500;
+        .sidebar-logo { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; }
+        .logo-icon { background: var(--blue); border-radius: 8px; width: 34px; height: 34px; display: grid; place-items: center; font-size: 16px; flex-shrink: 0; }
+        .logo-text { font-size: 15px; font-weight: 600; color: white; letter-spacing: -0.3px; }
+        .logo-text span { color: var(--teal); }
+
+        .sidebar-label { font-size: 10px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; color: rgba(255,255,255,0.35); margin-bottom: 8px; margin-top: 20px; padding: 0 8px; }
+
+        .nav-item {
+            display: flex; flex-direction: column; padding: 10px 12px;
+            border-radius: 8px; cursor: pointer; margin-bottom: 4px;
+            border: 1px solid transparent; transition: all 0.15s;
+        }
+        .nav-item:hover { background: rgba(255,255,255,0.07); }
+        .nav-item.active { background: var(--blue); border-color: rgba(255,255,255,0.15); }
+        .nav-item .title { font-size: 13px; font-weight: 600; color: white; }
+        .nav-item .sub   { font-size: 11px; color: rgba(255,255,255,0.45); margin-top: 2px; }
+
+        .region-select {
+            background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 8px; padding: 8px 12px; color: white; font-family: var(--sans);
+            font-size: 13px; width: 100%; cursor: pointer; margin-bottom: 4px;
+            appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23ffffff60' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat; background-position: right 12px center;
+        }
+        .region-select:focus { outline: none; border-color: var(--teal); }
+
+        .chip-btn {
+            display: block; width: 100%; text-align: left;
+            background: none; border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 20px; padding: 6px 14px; color: rgba(255,255,255,0.8);
+            font-family: var(--sans); font-size: 12px; cursor: pointer;
+            margin-bottom: 6px; transition: all 0.15s;
+        }
+        .chip-btn:hover { background: var(--blue); border-color: var(--blue); color: white; }
+
+        .db-badge {
+            margin-top: auto; display: flex; align-items: center; gap: 8px;
+            padding: 10px 12px; background: rgba(54,179,126,0.12);
+            border: 1px solid rgba(54,179,126,0.25); border-radius: 8px;
+            font-size: 12px; color: var(--success);
+        }
+        .db-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); flex-shrink: 0; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.4; } }
+
+        /* ── MAIN PANEL ── */
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+        .topbar {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 14px 24px; background: var(--surface);
+            border-bottom: 1px solid var(--border); flex-shrink: 0;
+        }
+        .topbar-title { font-size: 16px; font-weight: 600; color: var(--text-main); }
+        .topbar-badges { display: flex; gap: 8px; }
+        .badge {
+            font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 20px;
+            border: 1px solid var(--blue); color: var(--blue); background: rgba(0,82,204,0.06);
+            font-family: var(--mono);
+        }
+        .badge.teal { border-color: var(--teal); color: var(--teal); background: rgba(0,184,217,0.06); }
+
+        /* ── CHAT ── */
+        .chat-area { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+        .chat-area::-webkit-scrollbar { width: 4px; }
+        .chat-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+        .msg-user { align-self: flex-end; max-width: 65%; }
+        .bubble-user {
+            background: var(--navy); color: white; border-radius: 16px 16px 4px 16px;
+            padding: 12px 18px; font-size: 14px; font-weight: 500;
         }
 
-        /* Data & UI Components */
-        .sql-box { background: #172B4D; color: #8993A4; padding: 12px; border-radius: 6px; font-size: 0.8rem; margin: 10px 0; }
-        .suggestion-chip {
-            border: 1px solid var(--vantage-blue); color: var(--vantage-blue);
-            padding: 6px 14px; border-radius: 20px; cursor: pointer;
-            display: inline-block; margin: 4px; font-size: 0.85rem; background: white;
-            transition: 0.2s;
+        .msg-assistant { align-self: flex-start; max-width: 82%; width: 100%; }
+        .bubble-assistant {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 4px 16px 16px 16px; padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
         }
-        .suggestion-chip:hover { background: var(--vantage-blue); color: white; }
-        
-        /* Input Area */
-        .input-footer { background: white; border-top: 1px solid #DFE1E6; padding: 20px; position: absolute; bottom: 0; width: calc(100% - 25%); }
-        .form-control:focus { box-shadow: none; border-color: var(--vantage-blue); }
+        .bubble-assistant .answer { font-size: 14px; color: var(--text-main); margin-bottom: 14px; }
+
+        /* Metric cards */
+        .metrics-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; }
+        .metric-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+        .metric-label { font-size: 10px; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; color: var(--text-mute); }
+        .metric-value { font-size: 20px; font-weight: 700; color: var(--text-main); font-family: var(--mono); margin-top: 4px; }
+        .metric-delta { font-size: 11px; color: var(--success); margin-top: 3px; font-family: var(--mono); }
+
+        /* Chart placeholder */
+        .chart-placeholder {
+            background: linear-gradient(135deg, rgba(0,82,204,0.04) 0%, rgba(0,184,217,0.04) 100%);
+            border: 1px dashed var(--border); border-radius: 10px;
+            height: 200px; display: grid; place-items: center;
+            color: var(--text-mute); font-size: 13px; margin-bottom: 14px;
+        }
+
+        /* SQL box */
+        .sql-block {
+            background: var(--navy); border-radius: 8px; padding: 12px 16px;
+            font-family: var(--mono); font-size: 11px; color: #8993A4;
+            margin-bottom: 14px; overflow-x: auto; white-space: pre;
+        }
+        .sql-block .kw { color: var(--teal); }
+        .sql-block .str { color: #FFEAA7; }
+
+        /* Reaction row */
+        .reaction-row { display: flex; align-items: center; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); margin-top: 6px; }
+        .reaction-label { font-size: 12px; color: var(--text-mute); }
+        .reaction-btn { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 13px; transition: all 0.12s; }
+        .reaction-btn:hover { border-color: var(--blue); background: rgba(0,82,204,0.06); }
+
+        /* Tableau push row */
+        .action-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+        .action-input {
+            flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px;
+            font-family: var(--mono); font-size: 12px; color: var(--text-main);
+            background: var(--bg);
+        }
+        .action-input:focus { outline: none; border-color: var(--blue); }
+        .push-btn {
+            background: var(--blue); color: white; border: none; border-radius: 8px;
+            padding: 7px 16px; font-size: 12px; font-weight: 600; cursor: pointer;
+            white-space: nowrap; transition: opacity 0.15s;
+        }
+        .push-btn:hover { opacity: 0.85; }
+
+        /* Welcome bubble */
+        .welcome-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+        .welcome-chip {
+            border: 1px solid var(--blue); color: var(--blue); background: white;
+            padding: 5px 14px; border-radius: 20px; font-size: 12px; cursor: pointer;
+            transition: all 0.15s;
+        }
+        .welcome-chip:hover { background: var(--blue); color: white; }
+
+        /* ── INPUT FOOTER ── */
+        .input-footer {
+            padding: 16px 24px; background: var(--surface);
+            border-top: 1px solid var(--border); flex-shrink: 0;
+        }
+        .input-wrap {
+            display: flex; align-items: center; gap: 10px;
+            background: var(--bg); border: 1px solid var(--border);
+            border-radius: 28px; padding: 8px 8px 8px 20px;
+            transition: border-color 0.15s;
+        }
+        .input-wrap:focus-within { border-color: var(--blue); }
+        .input-wrap input {
+            flex: 1; border: none; background: none; font-family: var(--sans);
+            font-size: 14px; color: var(--text-main); outline: none;
+        }
+        .input-wrap input::placeholder { color: var(--text-mute); }
+        .send-btn {
+            background: var(--blue); color: white; border: none;
+            border-radius: 22px; padding: 8px 20px; font-size: 13px;
+            font-weight: 600; cursor: pointer; transition: opacity 0.15s;
+            font-family: var(--sans);
+        }
+        .send-btn:hover { opacity: 0.85; }
+        .input-disclaimer { text-align: center; margin-top: 6px; font-size: 11px; color: var(--text-mute); }
     </style>
 </head>
 <body>
 
-<div class="container-fluid p-0">
-    <div class="row g-0">
-        <div class="col-md-3 sidebar">
-            <div class="d-flex align-items-center mb-4">
-                <div class="bg-primary rounded p-2 me-2">🎥</div>
-                <h3>Foundry Vantage</h3>
-            </div>
-            
-            <p class="text-uppercase small fw-bold text-muted mb-2">Dashboards</p>
-            <div class="nav-item-custom active" onclick="selectDashboard('executive')">
-                <div class="small fw-bold">Executive Insights</div>
-                <div class="x-small text-muted" style="font-size: 0.7rem;">High-level content planning</div>
-            </div>
-            <div class="nav-item-custom" onclick="selectDashboard('workorders')">
-                <div class="small fw-bold">Ops Tracker</div>
-                <div class="x-small text-muted" style="font-size: 0.7rem;">Work orders and vendors</div>
-            </div>
-            
-            <div class="mt-4">
-                <p class="text-uppercase small fw-bold text-muted mb-2">Your Context</p>
-                <select id="regionSelect" class="form-select form-select-sm bg-dark text-white border-secondary mb-2">
-                    <option value="NA">Region: North America</option>
-                    <option value="APAC" selected>Region: APAC</option>
-                    <option value="EMEA">Region: EMEA</option>
-                </select>
-            </div>
+<!-- ── SIDEBAR ── -->
+<div class="sidebar">
+    <div class="sidebar-logo">
+        <div class="logo-icon">🎥</div>
+        <div class="logo-text">Foundry <span>Vantage</span></div>
+    </div>
 
-            <div class="mt-4 p-3 bg-light rounded text-dark shadow-sm">
-                <canvas id="miniDashboardChart" style="max-height: 150px;"></canvas>
-            </div>
-        </div>
+    <div class="sidebar-label">Dashboards</div>
+    <div class="nav-item active">
+        <div class="title">Executive Insights</div>
+        <div class="sub">High-level content planning</div>
+    </div>
+    <div class="nav-item">
+        <div class="title">Ops Tracker</div>
+        <div class="sub">Work orders and vendors</div>
+    </div>
 
-        <div class="col-md-9 position-relative">
-            <div class="d-flex justify-content-between align-items-center p-3 bg-white border-bottom shadow-sm">
-                <div>
-                    <span class="badge bg-soft-primary text-primary border border-primary px-3 py-2">
-                        Market Filter: <strong id="activeRegionDisplay">APAC</strong>
-                    </span>
-                </div>
-                <div class="text-muted small">Connected to <strong>Snowflake Production</strong></div>
-            </div>
+    <div class="sidebar-label">Context</div>
+    <select class="region-select" id="regionSelect" onchange="updateRegion(this.value)">
+        <option value="NA">North America</option>
+        <option value="APAC" selected>APAC</option>
+        <option value="EMEA">EMEA</option>
+        <option value="LATAM">LATAM</option>
+    </select>
+    <select class="region-select" id="personaSelect" onchange="updatePersona(this.value)" style="margin-top:4px">
+        <option>Leadership</option>
+        <option selected>Product</option>
+        <option>Operations</option>
+        <option>Finance</option>
+    </select>
 
-            <div class="chat-container" id="chat-box">
-                <div class="message-row">
-                    <div class="vantage-bubble">
-                        <strong>Welcome back.</strong> I'm monitoring the media supply chain in <strong>APAC</strong>. 
-                        How can I help you optimize your content delivery today?
-                        <div class="mt-3" id="suggestion-list">
-                            </div>
-                    </div>
-                </div>
+    <div class="sidebar-label" style="margin-top:20px">Suggested Queries</div>
+    <div id="chips-container">
+        <!-- populated by JS -->
+    </div>
 
-                {% for msg in chat_history %}
-                <div class="message-row">
-                    <div class="user-bubble">{{ msg.question }}</div>
-                </div>
-                <div class="message-row">
-                    <div class="vantage-bubble">
-                        <div class="mb-2">{{ msg.answer|safe }}</div>
-                        
-                        {% if msg.sql %}
-                        <details class="mb-2">
-                            <summary class="small text-muted cursor-pointer">View Technical Logic</summary>
-                            <div class="sql-box">{{ msg.sql }}</div>
-                        </details>
-                        {% endif %}
-
-                        {% if msg.data %}
-                        <div class="table-responsive border rounded mt-2">
-                            {{ msg.data|safe }}
-                        </div>
-                        {% endif %}
-
-                        <div class="d-flex align-items-center mt-3 pt-2 border-top">
-                            <span class="small text-muted me-3">Was this accurate?</span>
-                            <button class="btn btn-sm btn-outline-secondary me-2">👍</button>
-                            <button class="btn btn-sm btn-outline-secondary">👎</button>
-                        </div>
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-
-            <div class="input-footer">
-                <div class="input-group shadow-sm border rounded-pill overflow-hidden bg-white p-1">
-                    <input type="text" id="questionInput" class="form-control border-0 ps-3" placeholder="Type your data inquiry here (e.g. 'Show me delayed orders in APAC')...">
-                    <button class="btn btn-primary rounded-pill px-4" onclick="handleSend()">
-                        Analyze
-                    </button>
-                </div>
-                <div class="text-center mt-2">
-                    <small class="text-muted" style="font-size: 0.7rem;">Foundry Vantage can make mistakes. Verify critical data in Tableau.</small>
-                </div>
-            </div>
-        </div>
+    <div class="db-badge">
+        <div class="db-dot"></div>
+        Snowflake · Production
     </div>
 </div>
 
+<!-- ── MAIN ── -->
+<div class="main">
+
+    <!-- Topbar -->
+    <div class="topbar">
+        <div class="topbar-title">🔍 <span id="persona-title">Product</span> Insights</div>
+        <div class="topbar-badges">
+            <span class="badge" id="region-badge">REGION: APAC</span>
+            <span class="badge teal">SNOWFLAKE PROD</span>
+        </div>
+    </div>
+
+    <!-- Chat -->
+    <div class="chat-area" id="chat-box">
+
+        <!-- Welcome message -->
+        <div class="msg-assistant">
+            <div class="bubble-assistant">
+                <div class="answer">
+                    <strong>Welcome back.</strong> I'm monitoring the media supply chain in <strong id="welcome-region">APAC</strong>.
+                    How can I help you optimize your content delivery today?
+                </div>
+                <div class="welcome-chips" id="welcome-chips">
+                    <!-- populated by JS -->
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Input footer -->
+    <div class="input-footer">
+        <div class="input-wrap">
+            <input type="text" id="queryInput" placeholder="Ask about deals, vendors, or work orders (e.g. 'Show delayed orders in APAC')…" onkeydown="if(event.key==='Enter')handleSend()">
+            <button class="send-btn" onclick="handleSend()">Analyze →</button>
+        </div>
+        <div class="input-disclaimer">Foundry Vantage can make mistakes. Verify critical data in Tableau.</div>
+    </div>
+
+</div>
+
 <script>
-    // Logic to handle UI interactions and "Market Context" persistence
-    function selectDashboard(name) {
-        // Implementation for dashboard switching
+    /* ── State ── */
+    let state = {
+        region:  'APAC',
+        persona: 'Product',
+    };
+
+    const PROMPTS = {
+        Leadership:  r => [`Top vendors in ${r}`, `Market value overview for ${r}`],
+        Product:     r => [`Show SVOD rights in ${r}`, `Rights scope breakdown ${r}`],
+        Operations:  r => [`Work order status ${r}`, `Delayed tasks ${r}`],
+        Finance:     r => [`Total spend per vendor in ${r}`, `Highest cost deals ${r}`],
+    };
+
+    /* ── Init chips ── */
+    function renderChips() {
+        const chips = PROMPTS[state.persona](state.region);
+
+        // Sidebar chips
+        document.getElementById('chips-container').innerHTML =
+            chips.map(c => `<button class="chip-btn" onclick="injectPrompt('${c}')">${c}</button>`).join('');
+
+        // Welcome chips
+        document.getElementById('welcome-chips').innerHTML =
+            chips.map(c => `<span class="welcome-chip" onclick="injectPrompt('${c}')">${c}</span>`).join('');
     }
 
+    function injectPrompt(text) {
+        document.getElementById('queryInput').value = text;
+        document.getElementById('queryInput').focus();
+    }
+
+    function updateRegion(val) {
+        state.region = val;
+        document.getElementById('activeRegion').textContent   = val;
+        document.getElementById('welcome-region').textContent = val;
+        document.getElementById('region-badge').textContent   = `REGION: ${val}`;
+        renderChips();
+    }
+
+    function updatePersona(val) {
+        state.persona = val;
+        document.getElementById('persona-title').textContent = val;
+        renderChips();
+    }
+
+    /* ── Send query (wires to /ask in a real Flask deployment) ── */
     function handleSend() {
-        const q = document.getElementById('questionInput').value;
-        if(!q) return;
-        // Logic to trigger your /ask endpoint
-    }
-</script>
+        const q = document.getElementById('queryInput').value.trim();
+        if (!q) return;
+        document.getElementById('queryInput').value = '';
 
+        const box = document.getElementById('chat-box');
+
+        // User bubble
+        const uRow = document.createElement('div');
+        uRow.className = 'msg-user';
+        uRow.innerHTML = `<div class="bubble-user">${escHtml(q)}</div>`;
+        box.appendChild(uRow);
+
+        // Assistant thinking bubble
+        const aRow = document.createElement('div');
+        aRow.className = 'msg-assistant';
+        aRow.innerHTML = `
+            <div class="bubble-assistant" id="thinking-bubble">
+                <div class="answer" style="color:var(--text-mute)">⏳ Querying <strong>${state.region}</strong>…</div>
+            </div>`;
+        box.appendChild(aRow);
+        box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
+
+        // In a real deployment: fetch('/ask', { method:'POST', body: JSON.stringify({q, region: state.region}) })
+        //   .then(r => r.json()).then(data => renderResponse(data, aRow));
+        //
+        // For this design reference, show a mock response after a short delay:
+        setTimeout(() => renderMockResponse(q, aRow), 900);
+    }
+
+    function renderMockResponse(q, aRow) {
+        aRow.innerHTML = `
+            <div class="bubble-assistant">
+                <div class="answer">
+                    Displaying <strong>${state.region}</strong> data for: <em>${escHtml(q)}</em>
+                </div>
+
+                <div class="metrics-row">
+                    <div class="metric-card">
+                        <div class="metric-label">Total Deal Value</div>
+                        <div class="metric-value">$4.2M</div>
+                        <div class="metric-delta">↑ avg $840K</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Active Vendors</div>
+                        <div class="metric-value">23</div>
+                        <div class="metric-delta">avg 4.6 deals</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Delayed Orders</div>
+                        <div class="metric-value" style="color:var(--warn)">7</div>
+                        <div class="metric-delta" style="color:var(--warn)">↑ 2 vs last week</div>
+                    </div>
+                </div>
+
+                <div class="chart-placeholder">
+                    📊 Chart renders here via Plotly in the Streamlit app
+                </div>
+
+                <details style="margin-bottom:12px">
+                    <summary style="font-size:12px;color:var(--text-mute);cursor:pointer">View SQL</summary>
+                    <div class="sql-block"><span class="kw">SELECT</span> vendor_name, <span class="kw">SUM</span>(deal_value)
+<span class="kw">FROM</span> deals
+<span class="kw">WHERE</span> region = <span class="str">'${state.region}'</span>
+<span class="kw">GROUP BY</span> vendor_name
+<span class="kw">ORDER BY</span> 2 <span class="kw">DESC</span>;</div>
+                </details>
+
+                <div style="font-size:11px;color:var(--text-mute);font-weight:600;letter-spacing:0.5px;text-transform:uppercase;margin-bottom:6px">Enterprise Actions</div>
+                <div class="action-row">
+                    <input class="action-input" type="text" value="Foundry_${state.region}_Report" placeholder="Tableau report name…">
+                    <button class="push-btn" onclick="mockPush(this)">🚀 Push to Tableau</button>
+                </div>
+
+                <div class="reaction-row">
+                    <span class="reaction-label">Was this accurate?</span>
+                    <button class="reaction-btn" onclick="this.style.borderColor='var(--success)'">👍</button>
+                    <button class="reaction-btn" onclick="this.style.borderColor='var(--danger)'">👎</button>
+                </div>
+            </div>`;
+
+        document.getElementById('chat-box').scrollTo({ top: document.getElementById('chat-box').scrollHeight, behavior: 'smooth' });
+    }
+
+    function mockPush(btn) {
+        btn.textContent = '✓ Pushed!';
+        btn.style.background = 'var(--success)';
+        setTimeout(() => { btn.textContent = '🚀 Push to Tableau'; btn.style.background = ''; }, 2500);
+    }
+
+    function escHtml(s) {
+        return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    /* ── Boot ── */
+    renderChips();
+</script>
 </body>
 </html>
