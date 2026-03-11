@@ -974,49 +974,55 @@ def page_chat():
     st.markdown('<div class="page-header">💬 Chat Query — Rights Explorer</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="page-sub">Natural language rights interrogation · {reg} · Ask about titles, rights windows, expiry, DNA, territories, exclusivity</div>', unsafe_allow_html=True)
 
-    # Suggested queries grouped by MVP intent type
-    with st.expander("💡 Sample queries by intent type", expanded=not st.session_state.chat_history):
+
+    # Suggested queries — using st.container instead of expander to avoid _arrow artifact
+    if not st.session_state.chat_history:
+        st.markdown("""
+        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;
+             padding:14px 16px;margin-bottom:12px">
+          <div style="font-size:.8rem;font-weight:700;color:#6366f1;
+               text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">
+            💡 Sample queries by intent type
+          </div>""", unsafe_allow_html=True)
+
         groups = {
-            "🔍 What titles do we have": [
+            "What titles do we have": [
                 "What titles do we have in APAC",
                 "Count titles by genre",
                 "Show me episodes of House of the Dragon",
             ],
-            "🔑 What titles do we have rights to": [
-                "What titles do we have SVOD rights to in NA",
-                "Show titles with exclusive PayTV rights in EMEA",
+            "Titles we have rights to": [
+                "What titles do we have SVOD rights to",
+                "Show titles with exclusive PayTV rights",
                 "Count titles with active STB-VOD rights",
                 "List titles by season with rights",
             ],
-            "📋 Rights detail for title/deal": [
+            "Rights for specific title": [
                 'What rights do we hold for "Succession"',
                 'Show all rights for "The Last of Us"',
-                'Rights for "House of the Dragon" in UK',
             ],
-            "⏰ Expiry alerts": [
+            "Expiry alerts": [
                 "Show SVOD rights expiring in 30 days",
-                "Which rights expire in the next 90 days in EMEA",
+                "Rights expiring in next 90 days",
                 "PayTV rights expiring soon",
             ],
-            "🚫 Do-Not-Air": [
-                "Show do-not-air restrictions for NA",
-                "DNA records by reason category",
-            ],
-            "📊 Rights analytics": [
-                "Rights breakdown by platform",
-                "Exclusivity analysis by territory",
-                "Rights landscape summary",
-                "Show holdback analysis",
+            "Do-Not-Air / Deals": [
+                "Show do-not-air restrictions",
+                "Active deals by vendor",
                 "Deal source breakdown TRL C2 FRL",
             ],
         }
         for grp, qs in groups.items():
-            st.markdown(f"**{grp}**")
+            st.markdown(f'<div style="font-size:.72rem;font-weight:600;color:#94a3b8;'
+                        f'text-transform:uppercase;letter-spacing:.05em;margin:8px 0 4px">{grp}</div>',
+                        unsafe_allow_html=True)
             cols = st.columns(len(qs))
             for col, q in zip(cols, qs):
                 if col.button(q, key=f"sug_{hash(q)}", use_container_width=True):
                     st.session_state.pending_prompt = q
                     st.rerun()
+
+        st.markdown('</div>', unsafe_allow_html=True)
 
     show_sql = st.toggle("Show SQL", value=st.session_state.user_prefs.get('show_sql', True), key="sql_tog")
     st.session_state.user_prefs['show_sql'] = show_sql
@@ -1027,7 +1033,7 @@ def page_chat():
             st.markdown(f"**{msg['question']}**  `{msg.get('region','')}`")
         with st.chat_message("assistant", avatar="🔑"):
             if msg.get("sql") and show_sql:
-                st.markdown(f'<div class="sql-box">{msg["sql"]}</div>', unsafe_allow_html=True)
+                st.code(msg["sql"], language="sql")
             if msg.get("metrics"):
                 mc = st.columns(len(msg["metrics"]))
                 for c, m in zip(mc, msg["metrics"]):
@@ -1063,7 +1069,7 @@ def page_chat():
                 else:
                     # Show SQL inline immediately — no expander, no rerun needed
                     if show_sql:
-                        st.markdown(f'<div class="sql-box">{sql}</div>', unsafe_allow_html=True)
+                        st.code(sql, language="sql")
 
                     res_df, db_err = execute_sql(sql, DB_CONN)
 
