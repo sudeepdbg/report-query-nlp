@@ -370,11 +370,13 @@ def _seed_deals(cur):
 def _seed_work_orders(cur, title_ids):
     today = datetime.now()
     rows  = []
+    cur.execute("SELECT title_id, title_name FROM title")
+    title_name_map = {row[0]: row[1] for row in cur.fetchall()}
     for _ in range(800):
         t_id   = random.choice(title_ids)
         vendor = random.choice(VENDORS)
         region = random.choice(REGIONS)
-        rows.append((t_id, f"Title-{t_id}", vendor[0], vendor[1],
+        rows.append((t_id, title_name_map.get(t_id, t_id), vendor[0], vendor[1],
             random.choice(["Encoding","QC","Localization","VFX","Audio","Mastering","Subtitling"]),
             random.choice(["Not Started","In Progress","Review","Completed","Delayed","On Hold"]),
             random.choice(["Critical","High","Medium","Low"]),
@@ -398,9 +400,14 @@ def _seed_content_deals(cur, title_ids):
     dctr = [1]
     buyers = ["Netflix","Amazon","Disney+","Apple TV+","Peacock","Paramount+","Hulu"]
 
+    # Build a lookup: title_id → real title_name
+    cur.execute("SELECT title_id, title_name FROM title")
+    title_name_map = {row[0]: row[1] for row in cur.fetchall()}
+
     for t_id in title_ids:
         if random.random() > 0.65:
             continue
+        real_title_name = title_name_map.get(t_id, t_id)  # use real name, not placeholder
         for _ in range(random.randint(1,3)):
             d_id   = f"CD{dctr[0]:05d}"
             dctr[0] += 1
@@ -423,7 +430,7 @@ def _seed_content_deals(cur, title_ids):
                 else:             tt = _rnd_date(today+timedelta(days=90), far);  status="Active"
                 days_rem = (datetime.strptime(tt,"%Y-%m-%d") - today).days
 
-                mr_rows.append((r_id, d_id, t_id, f"Title-{t_id}",
+                mr_rows.append((r_id, d_id, t_id, real_title_name,
                     random.choice(RIGHTS_TYPES), tf, tt, None, None,
                     _rnd_terr(region), region, _rnd_media_p(), _rnd_media_a(),
                     _rnd_lang(), _rnd_brand(),
@@ -460,6 +467,10 @@ def _seed_elemental(cur, title_ids):
     far   = datetime(2028,12,31)
     ed_rows, er_rows = [], []
     ctr = [1]
+
+    cur.execute("SELECT title_id, title_name FROM title")
+    title_name_map = {row[0]: row[1] for row in cur.fetchall()}
+
     for t_id in random.sample(title_ids, min(len(title_ids)//3, 500)):
         ed_id  = f"ED{ctr[0]:05d}"; ctr[0] += 1
         region = random.choice(REGIONS)
@@ -470,7 +481,7 @@ def _seed_elemental(cur, title_ids):
         tt = _rnd_date(datetime(2024,1,1), far)
         status = "Active" if datetime.strptime(tt,"%Y-%m-%d") > today else "Expired"
         er_id  = f"ELRG{len(er_rows)+1:06d}"
-        er_rows.append((er_id, ed_id, t_id, f"Title-{t_id}", tf, tt,
+        er_rows.append((er_id, ed_id, t_id, title_name_map.get(t_id, t_id), tf, tt,
             _rnd_terr(region), region, _rnd_media_p(), _rnd_media_a(),
             _rnd_lang(2), _rnd_brand(2), status,
             today.strftime("%Y-%m-%d %H:%M:%S")))
@@ -485,11 +496,15 @@ def _seed_elemental(cur, title_ids):
 def _seed_dna(cur, title_ids):
     today = datetime.now()
     rows  = []
+
+    cur.execute("SELECT title_id, title_name FROM title")
+    title_name_map = {row[0]: row[1] for row in cur.fetchall()}
+
     for t_id in random.sample(title_ids, min(len(title_ids)//5, 300)):
         cat  = random.choice(DNA_CATEGORIES)
         sub  = random.choice(DNA_SUBCATS[cat])
         region = random.choice(REGIONS)
-        rows.append((f"DNA{len(rows)+1:05d}", t_id, f"Title-{t_id}",
+        rows.append((f"DNA{len(rows)+1:05d}", t_id, title_name_map.get(t_id, t_id),
             region, _rnd_terr(region,2), _rnd_media_p(),
             cat, sub,
             today.strftime("%Y-%m-%d"),
@@ -506,16 +521,19 @@ def _seed_sales(cur, title_ids):
     today  = datetime.now()
     buyers = ["Netflix","Amazon","Disney+","Apple TV+","Peacock",
               "Paramount+","Hulu","BritBox","Stan","Hotstar"]
+    cur.execute("SELECT title_id, title_name FROM title")
+    title_name_map = {row[0]: row[1] for row in cur.fetchall()}
     rows = []
     for t_id in random.sample(title_ids, min(len(title_ids)//2, 700)):
         region = random.choice(REGIONS)
         tf = _rnd_date(datetime(2021,1,1), today)
         tt = _rnd_date(today, datetime(2027,12,31))
         status = "Active" if datetime.strptime(tt,"%Y-%m-%d") > today else "Expired"
+        real_name = title_name_map.get(t_id, t_id)
         rows.append((f"SD{len(rows)+1:05d}",
             random.choice(["Affiliate Sales","3rd Party Sales"]),
-            f"Sales Deal {t_id[:6]}",
-            t_id, f"Title-{t_id}", random.choice(buyers),
+            f"Sales Deal — {real_name}",
+            t_id, real_name, random.choice(buyers),
             _rnd_terr(region,2), region, _rnd_media_p(),
             tf, tt, round(random.uniform(50000,5000000),2),
             random.choice(["USD","EUR","GBP"]), status,
