@@ -444,7 +444,13 @@ def page_rights():
                     "Restrictions":           st.column_config.TextColumn("Restrictions"),
                 })
             csv = exp_df.to_csv(index=False)
-            st.download_button("📥 Export Expiry Report", csv, f"expiry_{reg}_{days_sel}d.csv", "text/csv")
+           st.download_button(
+    label="📥 Export CSV",
+    data=df.to_csv(index=False),
+    file_name=f"vendors_{reg}.csv",
+    mime="text/csv",
+    key=f"dl_btn_{reg.lower()}_{active_region.lower()}" # Unique key prevents ID collision
+)
 
     # ── Windows & Platforms ───────────────────────────────────────────────────
     with tab2:
@@ -677,14 +683,7 @@ def page_rights():
                     "Holdback":                st.column_config.TextColumn("Holdback 🔒"),
                     "status":                  st.column_config.TextColumn("Status"),
                 })
-            # Adding a unique key based on the region ensures no ID collision
-st.download_button(
-    label="📥 Export CSV",
-    data=df.to_csv(index=False),
-    file_name=f"vendors_{reg}.csv",
-    mime="text/csv",
-    key=f"dl_btn_{reg.lower()}"  # This makes the ID unique per region
-)
+            st.download_button("📥 Export CSV", df.to_csv(index=False), f"rights_{reg}.csv", "text/csv")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
