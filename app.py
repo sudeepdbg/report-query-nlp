@@ -258,19 +258,18 @@ with st.sidebar:
       </div>
     </div>""", unsafe_allow_html=True)
 
-    # Navigation
+    # Navigation — emoji only in HTML div, plain text in st.button to avoid _arrow_right artifacts
     for pid, icon, label in PAGES:
         active = st.session_state.page == pid
         if active:
             st.markdown(
                 f'<div style="display:flex;align-items:center;gap:10px;background:rgba(124,58,237,.2);'
-                f'border:1px solid rgba(124,58,237,.5);border-radius:8px;padding:9px 14px;margin:2px 8px">'
-                f'<span>{icon}</span>'
+                f'border:1px solid rgba(124,58,237,.5);border-radius:8px;padding:9px 14px;margin:2px 8px 2px 8px">'
+                f'<span style="font-size:14px">{icon}</span>'
                 f'<span style="font-size:.86rem;font-weight:700;color:#c4b5fd">{label}</span></div>',
                 unsafe_allow_html=True)
-            st.button(f"{icon} {label}", key=f"nav_{pid}", disabled=True, use_container_width=True)
         else:
-            if st.button(f"{icon} {label}", key=f"nav_{pid}", use_container_width=True):
+            if st.button(f"{icon}  {label}", key=f"nav_{pid}", use_container_width=True):
                 st.session_state.page = pid
                 st.rerun()
 
@@ -1025,26 +1024,24 @@ def page_chat():
     # Chat history
     for i, msg in enumerate(st.session_state.chat_history):
         with st.chat_message("user"):
-            st.markdown(f"**{msg['question']}**")
+            st.markdown(f"**{msg['question']}**  `{msg.get('region','')}`")
         with st.chat_message("assistant", avatar="🔑"):
-            st.markdown(msg.get("answer","Here are the results:"))
             if msg.get("sql") and show_sql:
-                with st.expander("🔍 SQL", expanded=False):
-                    st.markdown(f'<div class="sql-box">{msg["sql"]}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="sql-box">{msg["sql"]}</div>', unsafe_allow_html=True)
             if msg.get("metrics"):
                 mc = st.columns(len(msg["metrics"]))
                 for c, m in zip(mc, msg["metrics"]):
                     c.metric(m["label"], m["value"])
             if msg.get("chart"):
                 st.plotly_chart(msg["chart"], use_container_width=True, key=f"hchart_{i}")
+            st.markdown(msg.get("answer", "Here are the results:"))
             if msg.get("data") is not None and not msg["data"].empty:
-                with st.expander("📊 Data", expanded=True):
-                    st.dataframe(msg["data"], use_container_width=True, hide_index=True)
-                    st.download_button("📥 CSV", msg["data"].to_csv(index=False),
-                                       f"query_{i}.csv", "text/csv", key=f"dl_h_{i}")
+                st.dataframe(msg["data"], use_container_width=True, hide_index=True, height=280)
+                st.download_button("📥 CSV", msg["data"].to_csv(index=False),
+                                   f"query_{i}.csv", "text/csv", key=f"dl_h_{i}")
 
     # Input
-    user_input   = st.chat_input(f"Ask about rights, titles, expiry, DNA… [{reg}]")
+    user_input    = st.chat_input(f"Ask about rights, titles, expiry, DNA… [{reg}]")
     active_prompt = None
     if 'pending_prompt' in st.session_state and st.session_state.pending_prompt:
         active_prompt = st.session_state.pending_prompt
@@ -1054,18 +1051,19 @@ def page_chat():
 
     if active_prompt:
         with st.chat_message("user"):
-            st.markdown(f"**{active_prompt}**")
+            st.markdown(f"**{active_prompt}**  `{reg}`")
 
         with st.chat_message("assistant", avatar="🔑"):
             with st.spinner("Analysing…"):
+                # Always use sidebar region as base; query text may refine it
                 sql, error, chart_type, region_ctx = parse_query(active_prompt, reg)
 
                 if error:
                     st.error(f"❌ {error}")
                 else:
+                    # Show SQL inline immediately — no expander, no rerun needed
                     if show_sql:
-                        with st.expander("🔍 SQL", expanded=True):
-                            st.markdown(f'<div class="sql-box">{sql}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="sql-box">{sql}</div>', unsafe_allow_html=True)
 
                     res_df, db_err = execute_sql(sql, DB_CONN)
 
@@ -1086,14 +1084,14 @@ def page_chat():
                                 mc[2].metric("Records",     f"{len(res_df):,}")
                                 mc[3].metric("Max",         f"{res_df[vc].max():,.0f}")
                                 metrics_data = [
-                                    {"label":"Total","value":f"{res_df[vc].sum():,.0f}"},
-                                    {"label":"Avg",  "value":f"{res_df[vc].mean():,.1f}"},
-                                    {"label":"Records","value":f"{len(res_df):,}"},
-                                    {"label":"Max",  "value":f"{res_df[vc].max():,.0f}"},
+                                    {"label":"Total",   "value":f"{res_df[vc].sum():,.0f}"},
+                                    {"label":"Avg",     "value":f"{res_df[vc].mean():,.1f}"},
+                                    {"label":"Records", "value":f"{len(res_df):,}"},
+                                    {"label":"Max",     "value":f"{res_df[vc].max():,.0f}"},
                                 ]
                             except: pass
 
-                        # Chart or table
+                        # Chart
                         fig = None
                         if chart_type == 'bar' and len(res_df.columns) >= 2:
                             x_col = res_df.columns[0]
@@ -1108,26 +1106,26 @@ def page_chat():
                         if fig:
                             st.plotly_chart(fig, use_container_width=True)
 
-                        answer_txt = (f"📊 **{len(res_df):,} records** found for **{region_ctx}**. "
-                                      f"{'Showing expiry-sorted rights.' if 'expir' in active_prompt.lower() else ''}")
+                        answer_txt = (f"📊 **{len(res_df):,} records** for **{region_ctx}**."
+                                      + (" Sorted by expiry date." if 'expir' in active_prompt.lower() else ""))
                         st.markdown(answer_txt)
-                        st.dataframe(res_df, use_container_width=True, hide_index=True, height=320)
+                        st.dataframe(res_df, use_container_width=True, hide_index=True, height=300)
                         st.download_button("📥 Download CSV", res_df.to_csv(index=False),
                                            f"rights_query_{region_ctx}.csv", "text/csv",
                                            key="dl_live")
 
+                        # Save to history — no rerun, stays visible
                         st.session_state.chat_history.append({
                             "question": active_prompt,
                             "answer":   answer_txt,
-                            "data":     res_df,
+                            "data":     res_df.copy(),
                             "chart":    fig,
                             "metrics":  metrics_data,
                             "sql":      sql,
                             "region":   region_ctx,
                         })
-                        st.rerun()
                     else:
-                        st.warning("No records returned — try adjusting your query or region.")
+                        st.warning("No records returned — try adjusting your query or region filter.")
 
     if st.session_state.chat_history:
         if st.button("🗑 Clear Chat", key="clear_chat"):
