@@ -156,7 +156,7 @@ for k, v in {
     'chat_history': [],
     'current_region': 'NA',
     'persona': 'Business Affairs',
-    'user_prefs': {'show_sql': True},
+    'user_prefs': {'show_sql': True, 'raw_sql_mode': False},
     'db_stats': {},
     'pending_prompt': None,
 }.items():
@@ -940,7 +940,7 @@ def page_dna():
                            .reset_index().sort_values('count',ascending=False))
                 st.plotly_chart(bar(terr_df.head(12),'territory','count','DNA Flags by Territory',h=280), use_container_width=True)
 
-    with tab3:
+    with tab2:
         df = run(f"""
             SELECT dna.dna_id, dna.title_name, t.series_id,
                    dna.reason_category, dna.reason_subcategory,
@@ -1098,35 +1098,29 @@ def page_chat():
           </div>""", unsafe_allow_html=True)
 
         groups = {
-            "What titles do we have": [
-                "What titles do we have in APAC",
-                "Count titles by genre",
-                "Show me episodes of House of the Dragon",
+            "🔗 Cross-table joins": [
+                "Movies with DNA flags",
+                "Titles with rights, DNA and sales deals",
+                "Rights expiring in 60 days with active sales deals",
+                "Work orders linked to expiring rights",
+                "Movies sold to Netflix or Amazon",
             ],
-            "Titles we have rights to": [
+            "📋 Rights & Titles": [
                 "What titles do we have SVOD rights to",
                 "Show titles with exclusive PayTV rights",
-                "Count titles with active STB-VOD rights",
-                "List titles by season with rights",
-            ],
-            "Rights for specific title": [
                 'What rights do we hold for "Succession"',
-                'Show all rights for "The Last of Us"',
-            ],
-            "Expiry alerts": [
                 "Show SVOD rights expiring in 30 days",
-                "Rights expiring in next 90 days",
-                "PayTV rights expiring soon",
             ],
-            "Movies & Films": [
+            "🎬 Movies": [
                 "Show all movies in the slate",
                 "Movies by box office revenue",
                 "Theatrical movies with active rights",
-                "Movies breakdown by genre",
+                "Franchise box office breakdown",
             ],
-            "Do-Not-Air / Deals": [
+            "🚫 DNA / Sales / Deals": [
                 "Show do-not-air restrictions",
                 "Active deals by vendor",
+                "Sales deals by buyer",
                 "Deal source breakdown TRL C2 FRL",
             ],
         }
@@ -1138,12 +1132,170 @@ def page_chat():
             for col, q in zip(cols, qs):
                 if col.button(q, key=f"sug_{hash(q)}", use_container_width=True):
                     st.session_state.pending_prompt = q
-                    st.rerun()
 
         st.markdown('</div>', unsafe_allow_html=True)
 
-    show_sql = st.toggle("Show SQL", value=st.session_state.user_prefs.get('show_sql', True), key="sql_tog")
-    st.session_state.user_prefs['show_sql'] = show_sql
+    col_a, col_b = st.columns([3, 1])
+    with col_a:
+        show_sql = st.toggle("Show SQL", value=st.session_state.user_prefs.get('show_sql', True), key="sql_tog")
+        st.session_state.user_prefs['show_sql'] = show_sql
+    with col_b:
+        raw_sql_mode = st.toggle("⚡ Raw SQL", value=st.session_state.user_prefs.get('raw_sql_mode', False), key="raw_sql_tog")
+        st.session_state.user_prefs['raw_sql_mode'] = raw_sql_mode
+
+    # ── Raw SQL editor ──────────────────────────────────────────────────────────
+    if raw_sql_mode:
+        st.markdown("""
+        <div style="background:#f8faff;border:1px solid #c7d2fe;border-radius:10px;
+             padding:12px 16px;margin-bottom:10px">
+          <div style="font-size:.78rem;font-weight:700;color:#4f46e5;margin-bottom:6px">
+            ⚡ Raw SQL Mode — type any SQL query directly against the Rights Explorer database
+          </div>
+          <div style="font-size:.72rem;color:#64748b">
+            Tables: <code>movie</code> · <code>title</code> · <code>series</code> · <code>season</code> ·
+            <code>media_rights</code> · <code>content_deal</code> · <code>exhibition_restrictions</code> ·
+            <code>elemental_rights</code> · <code>elemental_deal</code> · <code>do_not_air</code> ·
+            <code>sales_deal</code> · <code>deals</code> · <code>vendors</code> · <code>work_orders</code>
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+        # Quick-start templates
+        raw_templates = {
+            "— Pick a template —": "",
+            "Title health check (rights + DNA + sales)": """SELECT
+    t.title_name, t.title_type, t.content_category,
+    COUNT(DISTINCT mr.rights_id)                                    AS active_rights,
+    SUM(CASE WHEN mr.term_to <= DATE('now','+90 days') AND mr.status='Active' THEN 1 ELSE 0 END) AS expiring_90d,
+    COUNT(DISTINCT dna.dna_id)                                      AS dna_flags,
+    GROUP_CONCAT(DISTINCT dna.reason_category)                      AS dna_reasons,
+    COUNT(DISTINCT sd.sales_deal_id)                                AS sales_deals,
+    GROUP_CONCAT(DISTINCT sd.buyer)                                 AS buyers
+FROM title t
+LEFT JOIN media_rights mr ON t.title_id = mr.title_id AND mr.status='Active'
+LEFT JOIN do_not_air dna  ON t.title_id = dna.title_id AND dna.active=1
+LEFT JOIN sales_deal sd   ON t.title_id = sd.title_id
+WHERE UPPER(t.region) = 'NA'
+GROUP BY t.title_id
+ORDER BY dna_flags DESC, expiring_90d DESC
+LIMIT 100""",
+            "Expiry + sales overlap (renewal priority)": """SELECT
+    mr.title_name,
+    mr.media_platform_primary                                       AS rights_platform,
+    mr.term_to                                                      AS rights_expiry,
+    CAST(JULIANDAY(mr.term_to)-JULIANDAY('now') AS INTEGER)         AS days_left,
+    mr.exclusivity,
+    sd.buyer, sd.deal_value, sd.status                              AS sale_status,
+    CASE WHEN sd.sales_deal_id IS NOT NULL THEN '⚠ Active Sale' ELSE '— No Sale' END AS flag
+FROM media_rights mr
+JOIN content_deal cd ON mr.deal_id = cd.deal_id
+LEFT JOIN sales_deal sd ON mr.title_id = sd.title_id AND sd.status='Active'
+WHERE UPPER(mr.region)='NA'
+  AND mr.status='Active'
+  AND mr.term_to <= DATE('now','+90 days')
+ORDER BY days_left ASC
+LIMIT 100""",
+            "Work orders + rights expiry overlap": """SELECT
+    wo.title_name, wo.work_type, wo.status AS wo_status,
+    wo.priority, wo.due_date, wo.vendor_name,
+    COUNT(DISTINCT mr.rights_id)                                    AS active_rights,
+    MIN(mr.term_to)                                                 AS earliest_rights_expiry,
+    SUM(CASE WHEN mr.term_to <= DATE('now','+90 days') THEN 1 ELSE 0 END) AS rights_expiring_90d
+FROM work_orders wo
+LEFT JOIN title t      ON wo.title_id = t.title_id
+LEFT JOIN media_rights mr ON t.title_id = mr.title_id AND mr.status='Active'
+WHERE UPPER(wo.region)='NA'
+GROUP BY wo.work_order_id
+ORDER BY rights_expiring_90d DESC, wo.due_date ASC
+LIMIT 100""",
+            "Movies + DNA flags": """SELECT
+    m.movie_title, m.content_category, m.genre, m.franchise,
+    m.box_office_gross_usd_m,
+    COUNT(DISTINCT mr.rights_id)                                    AS active_rights,
+    COUNT(DISTINCT dna.dna_id)                                      AS dna_flags,
+    GROUP_CONCAT(DISTINCT dna.reason_category)                      AS dna_reasons,
+    GROUP_CONCAT(DISTINCT dna.territory)                            AS restricted_territories,
+    CASE WHEN COUNT(dna.dna_id) > 0 THEN '🚫 Flagged' ELSE '✅ Clean' END AS dna_status
+FROM movie m
+LEFT JOIN title t      ON t.movie_id = m.movie_id
+LEFT JOIN media_rights mr ON mr.title_id = t.title_id AND mr.status='Active'
+LEFT JOIN do_not_air dna  ON dna.title_id = t.title_id AND dna.active=1
+GROUP BY m.movie_id
+ORDER BY dna_flags DESC, m.box_office_gross_usd_m DESC""",
+            "Movies sold to external buyers": """SELECT
+    m.movie_title, m.content_category, m.genre,
+    m.box_office_gross_usd_m,
+    sd.buyer, sd.deal_type, sd.media_platform,
+    sd.deal_value, sd.currency,
+    sd.term_from, sd.term_to, sd.status
+FROM movie m
+JOIN title t      ON t.movie_id = m.movie_id
+JOIN sales_deal sd ON sd.title_id = t.title_id
+ORDER BY sd.deal_value DESC
+LIMIT 100""",
+            "Full content deal detail (all joins)": """SELECT
+    t.title_name, t.title_type, t.genre,
+    cd.deal_source, cd.deal_type, cd.deal_name,
+    mr.rights_type, mr.media_platform_primary, mr.media_platform_ancillary,
+    mr.territories, mr.language, mr.brand,
+    mr.term_from, mr.term_to, mr.exclusivity, mr.holdback, mr.holdback_days,
+    mr.status,
+    CAST(JULIANDAY(mr.term_to)-JULIANDAY('now') AS INTEGER) AS days_remaining,
+    er.max_plays, er.max_plays_per_day
+FROM media_rights mr
+JOIN content_deal cd             ON mr.deal_id   = cd.deal_id
+JOIN title t                     ON mr.title_id  = t.title_id
+LEFT JOIN exhibition_restrictions er ON er.rights_id = mr.rights_id
+WHERE UPPER(mr.region)='NA' AND mr.status='Active'
+ORDER BY mr.term_to ASC
+LIMIT 100""",
+        }
+
+        sel_template = st.selectbox("Quick-start template", list(raw_templates.keys()), key="raw_tpl")
+        default_sql  = raw_templates[sel_template] if sel_template != "— Pick a template —" else                        st.session_state.get("last_raw_sql", "SELECT * FROM movie LIMIT 10")
+
+        raw_sql_input = st.text_area("SQL Editor", value=default_sql, height=220, key="raw_sql_input",
+                                     help="Full SQLite syntax. All 14 tables available.")
+        run_raw = st.button("▶ Run SQL", type="primary", key="run_raw_btn")
+
+        if run_raw and raw_sql_input.strip():
+            st.session_state["last_raw_sql"] = raw_sql_input.strip()
+            with st.spinner("Running…"):
+                res_df, db_err = execute_sql(raw_sql_input.strip(), DB_CONN)
+            if db_err:
+                st.error(f"❌ SQL Error: {db_err}")
+            elif res_df is not None and not res_df.empty:
+                st.success(f"✅ {len(res_df):,} rows returned")
+                if show_sql:
+                    st.markdown(f'<div class="sql-box">{html.escape(raw_sql_input.strip())}</div>',
+                                unsafe_allow_html=True)
+                # Quick metrics
+                num_cols = [c for c in res_df.columns if pd.api.types.is_numeric_dtype(res_df[c])]
+                if num_cols:
+                    mc = st.columns(min(4, len(num_cols)))
+                    for i, nc in enumerate(num_cols[:4]):
+                        mc[i].metric(nc, f"{res_df[nc].sum():,.0f}")
+                # Chart auto-detect
+                if len(res_df.columns) >= 2:
+                    first_num = next((c for c in res_df.columns if pd.api.types.is_numeric_dtype(res_df[c])), None)
+                    if first_num and res_df.columns[0] != first_num and len(res_df) <= 50:
+                        fig = bar(res_df.head(30), res_df.columns[0], first_num, "Query Result")
+                        st.plotly_chart(fig, use_container_width=True)
+                st.dataframe(res_df, use_container_width=True, hide_index=True, height=380)
+                st.download_button("📥 Download CSV", res_df.to_csv(index=False),
+                                   "raw_sql_result.csv", "text/csv", key="dl_raw")
+                # Save to history
+                st.session_state.chat_history.append({
+                    "question": f"[SQL] {raw_sql_input.strip()[:80]}…",
+                    "answer":   f"📊 **{len(res_df):,} records** — raw SQL query",
+                    "data":     res_df.copy(),
+                    "chart":    None,
+                    "metrics":  [],
+                    "sql":      raw_sql_input.strip(),
+                    "region":   reg,
+                })
+            else:
+                st.warning("No records returned.")
+        st.divider()
 
     # Chat history
     for i, msg in enumerate(st.session_state.chat_history):
