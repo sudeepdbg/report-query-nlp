@@ -397,7 +397,34 @@ class QueryParser:
                 """
             return sql.strip(), None, 'bar', region_ctx
 
-        # ── 9. Work orders / operational ──────────────────────────────────────
+        # ── 9. Deals table queries ────────────────────────────────────────────
+        if any(kw in q for kw in DEAL_KW) and not any(kw in q for kw in RIGHTS_KW):
+            stat_f  = "AND status='Active'" if "active" in q else \
+                      "AND status='Expired'" if "expired" in q else \
+                      "AND (status='Pending' OR status='Under Negotiation')" if "pending" in q else ""
+            if any(kw in q for kw in ["vendor","by vendor","breakdown","by type","value","source"]):
+                group_col = "vendor_name" if "vendor" in q else "deal_type"
+                sql = f"""
+                    SELECT {group_col}, COUNT(*) AS deal_count,
+                           SUM(deal_value) AS total_value,
+                           AVG(deal_value) AS avg_value,
+                           SUM(CASE WHEN status='Active' THEN 1 ELSE 0 END) AS active,
+                           SUM(CASE WHEN payment_status='Overdue' THEN 1 ELSE 0 END) AS overdue
+                    FROM deals WHERE UPPER(region)='{regions[0]}' {stat_f}
+                    GROUP BY {group_col} ORDER BY total_value DESC LIMIT 15
+                """
+                return sql.strip(), None, 'bar', region_ctx
+            sql = f"""
+                SELECT deal_id, deal_name, vendor_name, deal_type,
+                       deal_value, rights_scope, territory,
+                       deal_date, expiry_date, status, payment_status,
+                       CAST(JULIANDAY(expiry_date)-JULIANDAY('now') AS INTEGER) AS days_to_expiry
+                FROM deals WHERE UPPER(region)='{regions[0]}' {stat_f}
+                ORDER BY deal_value DESC LIMIT 200
+            """
+            return sql.strip(), None, 'table', region_ctx
+
+        # ── 10. Work orders / operational ─────────────────────────────────────
         if any(kw in q for kw in WORK_KW):
             if "quality" in q or "vendor" in q:
                 sql = f"""
@@ -416,7 +443,7 @@ class QueryParser:
             """
             return sql.strip(), None, 'pie', region_ctx
 
-        # ── 10. Title catalog (what titles do we have) ─────────────────────────
+        # ── 11. Title catalog (what titles do we have) ─────────────────────────
         if any(kw in q for kw in TITLE_KW):
             title_f = f"WHERE {_region_where(regions,'t.region')}" + (
                 f" AND {_title_like(title_hint,'t.title_name')}" if title_hint else "")
@@ -441,14 +468,17 @@ class QueryParser:
             """
             return sql.strip(), None, 'table', region_ctx
 
-        # ── 11. Generic fallback ───────────────────────────────────────────────
+        # ── 12. Generic fallback — most recent active rights ───────────────────
+        stat_f = "AND mr.status='Active'" if "active" in q else \
+                 "AND mr.status='Expired'" if "expired" in q else ""
         sql = f"""
             SELECT mr.title_name, mr.rights_type,
                    mr.media_platform_primary, mr.territories,
                    mr.term_from, mr.term_to, mr.status,
                    CAST(JULIANDAY(mr.term_to)-JULIANDAY('now') AS INTEGER) AS days_remaining
-            FROM media_rights mr WHERE {rw_mr}
-            ORDER BY mr.term_to ASC LIMIT 100
+            FROM media_rights mr
+            WHERE {rw_mr} {stat_f}
+            ORDER BY mr.term_to DESC LIMIT 100
         """
         return sql.strip(), None, 'table', region_ctx
 
