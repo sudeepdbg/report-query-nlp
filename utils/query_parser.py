@@ -126,6 +126,38 @@ def _movie_cat_filter(q, prefix="m"):
     return ""
 
 
+
+# ── Cross-table join patterns ────────────────────────────────────────────────
+# Detected when keywords from 2+ distinct tables co-occur in the same query.
+
+def _detect_cross_intent(q):
+    """
+    Returns one of:
+      "title_health"    — movie/title + rights + DNA together
+      "expiry_sales"    — expiring rights + sales deals (renewal priority)
+      "workorder_rights"— work orders + rights/titles (operational overlap)
+      "movie_sales"     — movies + sales / buyer
+      "movie_dna"       — movies + DNA flags
+      "title_sales"     — specific title + sales deal lookup
+      None              — no cross-table intent detected
+    """
+    has_movie   = any(kw in q for kw in MOVIE_KW)
+    has_rights  = any(kw in q for kw in RIGHTS_KW) or any(kw in q for kw in EXPIRY_KW)
+    has_dna     = any(kw in q for kw in DNA_KW) or "flag" in q or "flagged" in q
+    has_sales   = any(kw in q for kw in SALES_KW) or "netflix" in q or "amazon" in q or "buyer" in q
+    has_work    = any(kw in q for kw in WORK_KW) or "work order" in q
+    has_expiry  = any(kw in q for kw in EXPIRY_KW)
+    has_title   = any(kw in q for kw in TITLE_KW) or any(kw in q for kw in MOVIE_KW)
+
+    # Rank by specificity — most specific first
+    if has_movie and has_dna:                          return "movie_dna"
+    if has_movie and has_sales:                        return "movie_sales"
+    if (has_movie or has_title) and has_rights and has_dna: return "title_health"
+    if has_expiry and has_sales:                       return "expiry_sales"
+    if has_work and (has_rights or has_title):         return "workorder_rights"
+    if has_title and has_sales:                        return "title_sales"
+    return None
+
 # ── Main parser ──────────────────────────────────────────────────────────────
 class QueryParser:
     @classmethod
@@ -151,7 +183,193 @@ class QueryParser:
         plat_mr    = _platform_like(platforms, "mr.media_platform_primary") if platforms else "1=1"
         title_hint = _extract_title_hints(question)
 
-        # ── 1. Do-Not-Air ────────────────────────────────────────────────────
+        # ── 0. CROSS-TABLE JOIN QUERIES (highest priority) ─────────────────────
+        #    Triggered when keywords from 2+ distinct tables appear together.
+        cross = _detect_cross_intent(q)
+
+        if cross == "title_health":
+            # Movie/title + rights + DNA — full health check per title
+            title_f = f"AND {_title_like(title_hint,'t.title_name')}" if title_hint else ""
+            cat_f   = _movie_cat_filter(q, "t")
+            sql = f"""
+                SELECT
+                    t.title_name,
+                    t.title_type,
+                    t.content_category,
+                    t.genre,
+                    COUNT(DISTINCT mr.rights_id)                                     AS total_rights,
+                    SUM(CASE WHEN mr.status='Active' THEN 1 ELSE 0 END)              AS active_rights,
+                    SUM(CASE WHEN mr.status='Active'
+                        AND mr.term_to <= DATE('now','+90 days') THEN 1 ELSE 0 END)  AS expiring_90d,
+                    MAX(CASE WHEN dna.active=1 THEN '🚫 YES' ELSE '✅ Clean' END)    AS dna_flag,
+                    COUNT(DISTINCT dna.dna_id)                                       AS dna_count,
+                    GROUP_CONCAT(DISTINCT dna.reason_category)                       AS dna_reasons,
+                    COUNT(DISTINCT sd.sales_deal_id)                                 AS sales_deals,
+                    GROUP_CONCAT(DISTINCT sd.buyer)                                  AS buyers
+                FROM title t
+                LEFT JOIN media_rights mr  ON t.title_id = mr.title_id
+                  AND UPPER(mr.region) = '{regions[0]}'
+                LEFT JOIN do_not_air dna   ON t.title_id = dna.title_id AND dna.active = 1
+                LEFT JOIN sales_deal sd    ON t.title_id = sd.title_id
+                  AND UPPER(sd.region) = '{regions[0]}'
+                WHERE {rw_t} {title_f} {cat_f}
+                GROUP BY t.title_id
+                ORDER BY dna_count DESC, expiring_90d DESC, active_rights DESC
+                LIMIT 150
+            """
+            return sql.strip(), None, 'table', region_ctx
+
+        if cross == "expiry_sales":
+            # Rights expiring soon + any existing sales deal — renewal priority list
+            days = 90
+            for d in re.findall(r'\b(\d+)\s*day', q): days = int(d); break
+            plat_f = f"AND {plat_mr}" if platforms else ""
+            sql = f"""
+                SELECT
+                    mr.title_name,
+                    mr.media_platform_primary                                         AS rights_platform,
+                    mr.territories,
+                    mr.term_to                                                        AS rights_expiry,
+                    CAST(JULIANDAY(mr.term_to)-JULIANDAY('now') AS INTEGER)          AS days_remaining,
+                    mr.exclusivity,
+                    mr.rights_type,
+                    sd.buyer                                                          AS sold_to,
+                    sd.deal_value                                                     AS sales_value,
+                    sd.media_platform                                                 AS sales_platform,
+                    sd.term_to                                                        AS sales_expiry,
+                    sd.status                                                         AS sales_status,
+                    CASE WHEN sd.sales_deal_id IS NOT NULL THEN '⚠ Active Sale' ELSE '— No Sale' END AS renewal_flag
+                FROM media_rights mr
+                JOIN content_deal cd ON mr.deal_id = cd.deal_id
+                LEFT JOIN sales_deal sd ON mr.title_id = sd.title_id
+                  AND UPPER(sd.region) = '{regions[0]}'
+                WHERE UPPER(mr.region) = '{regions[0]}'
+                  AND mr.status = 'Active'
+                  AND mr.term_to <= DATE('now', '+{days} days')
+                  AND mr.term_to >= DATE('now')
+                  {plat_f}
+                ORDER BY days_remaining ASC, sd.deal_value DESC
+                LIMIT 150
+            """
+            return sql.strip(), None, 'table', region_ctx
+
+        if cross == "workorder_rights":
+            # Work orders linked to titles that have active / expiring rights
+            sql = f"""
+                SELECT
+                    wo.work_order_id,
+                    wo.title_name,
+                    wo.work_type,
+                    wo.status                                                         AS wo_status,
+                    wo.priority,
+                    wo.due_date,
+                    wo.quality_score,
+                    wo.vendor_name,
+                    COUNT(DISTINCT mr.rights_id)                                     AS active_rights,
+                    MIN(mr.term_to)                                                  AS earliest_rights_expiry,
+                    CAST(JULIANDAY(MIN(mr.term_to))-JULIANDAY('now') AS INTEGER)    AS days_to_rights_expiry,
+                    SUM(CASE WHEN mr.term_to <= DATE('now','+90 days')
+                        AND mr.status='Active' THEN 1 ELSE 0 END)                  AS rights_expiring_90d
+                FROM work_orders wo
+                LEFT JOIN title t  ON wo.title_id = t.title_id
+                LEFT JOIN media_rights mr ON t.title_id = mr.title_id
+                  AND UPPER(mr.region) = '{regions[0]}' AND mr.status = 'Active'
+                WHERE {_region_where(regions,'wo.region')}
+                GROUP BY wo.work_order_id
+                ORDER BY rights_expiring_90d DESC, wo.due_date ASC
+                LIMIT 150
+            """
+            return sql.strip(), None, 'table', region_ctx
+
+        if cross == "movie_dna":
+            # Movies with their DNA restrictions
+            cat_f = _movie_cat_filter(q, "m")
+            sql = f"""
+                SELECT
+                    m.movie_title,
+                    m.content_category,
+                    m.genre,
+                    m.box_office_gross_usd_m                                         AS box_office_usd_m,
+                    m.franchise,
+                    COUNT(DISTINCT mr.rights_id)                                     AS active_rights,
+                    COUNT(DISTINCT dna.dna_id)                                       AS dna_flags,
+                    GROUP_CONCAT(DISTINCT dna.reason_category)                       AS dna_reasons,
+                    GROUP_CONCAT(DISTINCT dna.reason_subcategory)                    AS dna_subcategories,
+                    GROUP_CONCAT(DISTINCT dna.territory)                             AS restricted_territories,
+                    CASE WHEN COUNT(dna.dna_id) > 0 THEN '🚫 Flagged' ELSE '✅ Clean' END AS dna_status
+                FROM movie m
+                LEFT JOIN title t   ON t.movie_id = m.movie_id
+                LEFT JOIN media_rights mr ON mr.title_id = t.title_id
+                  AND UPPER(mr.region) = '{regions[0]}' AND mr.status = 'Active'
+                LEFT JOIN do_not_air dna ON dna.title_id = t.title_id AND dna.active = 1
+                WHERE 1=1 {cat_f}
+                GROUP BY m.movie_id
+                ORDER BY dna_flags DESC, m.box_office_gross_usd_m DESC
+            """
+            return sql.strip(), None, 'table', region_ctx
+
+        if cross == "movie_sales":
+            # Movies + their sales deals (rights-out) by buyer
+            cat_f = _movie_cat_filter(q, "m")
+            sql = f"""
+                SELECT
+                    m.movie_title,
+                    m.content_category,
+                    m.genre,
+                    m.box_office_gross_usd_m                                         AS box_office_usd_m,
+                    sd.buyer,
+                    sd.deal_type,
+                    sd.media_platform                                                 AS sold_platform,
+                    sd.territory                                                      AS sold_territory,
+                    sd.deal_value,
+                    sd.currency,
+                    sd.term_from                                                      AS sale_from,
+                    sd.term_to                                                        AS sale_to,
+                    sd.status                                                         AS sale_status,
+                    COUNT(DISTINCT mr.rights_id)                                     AS rights_in_count
+                FROM movie m
+                JOIN title t   ON t.movie_id = m.movie_id
+                LEFT JOIN sales_deal sd ON sd.title_id = t.title_id
+                  AND UPPER(sd.region) = '{regions[0]}'
+                LEFT JOIN media_rights mr ON mr.title_id = t.title_id
+                  AND UPPER(mr.region) = '{regions[0]}' AND mr.status = 'Active'
+                WHERE 1=1 {cat_f}
+                GROUP BY m.movie_id, sd.sales_deal_id
+                ORDER BY sd.deal_value DESC NULLS LAST, m.box_office_gross_usd_m DESC
+                LIMIT 150
+            """
+            return sql.strip(), None, 'table', region_ctx
+
+        if cross == "title_sales":
+            # Specific title + its sales deals
+            title_f = f"AND {_title_like(title_hint,'t.title_name')}" if title_hint else ""
+            sql = f"""
+                SELECT
+                    t.title_name,
+                    t.title_type,
+                    t.content_category,
+                    mr.media_platform_primary                                         AS rights_platform,
+                    mr.term_to                                                        AS rights_expiry,
+                    CAST(JULIANDAY(mr.term_to)-JULIANDAY('now') AS INTEGER)          AS rights_days_left,
+                    mr.status                                                         AS rights_status,
+                    sd.buyer,
+                    sd.media_platform                                                 AS sold_platform,
+                    sd.deal_value,
+                    sd.currency,
+                    sd.term_to                                                        AS sale_expiry,
+                    sd.status                                                         AS sale_status
+                FROM title t
+                LEFT JOIN media_rights mr ON t.title_id = mr.title_id
+                  AND UPPER(mr.region) = '{regions[0]}'
+                LEFT JOIN sales_deal sd ON t.title_id = sd.title_id
+                  AND UPPER(sd.region) = '{regions[0]}'
+                WHERE {rw_t} {title_f}
+                ORDER BY mr.term_to ASC
+                LIMIT 150
+            """
+            return sql.strip(), None, 'table', region_ctx
+
+                # ── 1. Do-Not-Air ────────────────────────────────────────────────────
         if any(kw in q for kw in DNA_KW):
             title_filter = f" AND {_title_like(title_hint,'dna.title_name')}" if title_hint else ""
             sql = f"""
