@@ -9,6 +9,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import time
 import re
+import html
 from datetime import datetime, timedelta
 import logging
 from typing import Optional
@@ -296,8 +297,8 @@ with st.sidebar:
     stats = st.session_state.db_stats
     stat_pairs = [
         ("title",        "Titles"),
+        ("movie",        "Movies"),
         ("media_rights", "Rights"),
-        ("content_deal", "Deals"),
         ("do_not_air",   "DNA"),
     ]
     html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin:10px 8px">'
@@ -685,29 +686,32 @@ def page_rights():
 def page_titles():
     reg = st.session_state.current_region
     st.markdown('<div class="page-header">🎬 Title Catalog</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="page-sub">Series → Season → Episode hierarchy · Logical content metadata · {reg}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="page-sub">Series · Movies · Episodes — Full WBD content registry · {reg}</div>', unsafe_allow_html=True)
 
     kpi = run(f"""
         SELECT COUNT(*) AS total,
                COUNT(DISTINCT series_id) AS series_count,
                COUNT(DISTINCT season_id) AS season_count,
                SUM(CASE WHEN title_type='Episode'  THEN 1 ELSE 0 END) AS episodes,
-               SUM(CASE WHEN title_type='Special'  THEN 1 ELSE 0 END) AS specials,
-               SUM(CASE WHEN title_type='Standalone' THEN 1 ELSE 0 END) AS standalone
+               SUM(CASE WHEN title_type='Movie'    THEN 1 ELSE 0 END) AS movies,
+               SUM(CASE WHEN title_type='Special'  THEN 1 ELSE 0 END) AS specials
         FROM title WHERE UPPER(region)='{reg}'
     """)
+    movie_kpi = run("SELECT COUNT(*) AS total, SUM(box_office_gross_usd_m) AS total_bo FROM movie")
     if not kpi.empty:
         r = kpi.iloc[0]
+        mr = movie_kpi.iloc[0] if not movie_kpi.empty else {}
         stat_tiles([
-            (f"{int(r.get('total',0)):,}",        "Total Titles",  "#0f172a"),
-            (f"{int(r.get('series_count',0)):,}",  "Series",        "#1e40af"),
-            (f"{int(r.get('season_count',0)):,}",  "Seasons",       "#5b21b6"),
-            (f"{int(r.get('episodes',0)):,}",      "Episodes",      "#166534"),
-            (f"{int(r.get('specials',0)):,}",      "Specials",      "#92400e"),
+            (f"{int(r.get('total',0)):,}",        "Total Titles",    "#0f172a"),
+            (f"{int(mr.get('total',0)):,}",        "Films in Slate",  "#1e40af"),
+            (f"{int(r.get('series_count',0)):,}",  "Series",          "#5b21b6"),
+            (f"{int(r.get('episodes',0)):,}",      "Episodes",        "#166534"),
+            (f"${mr.get('total_bo',0)/1000:.1f}B", "Total Box Office","#92400e"),
+            (f"{int(r.get('specials',0)):,}",      "Specials",        "#64748b"),
         ])
 
     st.divider()
-    tab1, tab2, tab3 = st.tabs(["📁 Hierarchy", "🎭 Genre & Metadata", "🔍 Search Titles"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📁 TV Hierarchy", "🎥 Movies", "🎭 Genre & Metadata", "🔍 Search All"])
 
     with tab1:
         df = run(f"""
@@ -742,7 +746,83 @@ def page_titles():
                 if not sea_df.empty:
                     st.dataframe(sea_df, use_container_width=True, hide_index=True)
 
+
+    # ── Movies Tab ──────────────────────────────────────────────────────────────
     with tab2:
+        st.markdown("#### WBD Film Slate — 25 Titles")
+        c1, c2, c3 = st.columns(3)
+        cat_f    = c1.selectbox("Category", ["All","Theatrical","Library","HBO Original"], key="mv_cat")
+        genre_f  = c2.selectbox("Genre",    ["All","Action","Drama","Comedy","Sci-Fi","Fantasy","Thriller","Historical","Animation"], key="mv_genre")
+        rights_only = c3.checkbox("Active rights only", key="mv_rights")
+
+        extras_mv = ""
+        if cat_f   != "All": extras_mv += f" AND m.content_category='{cat_f}'"
+        if genre_f != "All": extras_mv += f" AND m.genre='{genre_f}'"
+
+        mv_df = run(f"""
+            SELECT m.movie_id, m.movie_title, m.content_category, m.genre,
+                   m.franchise, m.box_office_gross_usd_m,
+                   m.age_rating, m.release_year,
+                   COUNT(DISTINCT mr.rights_id) AS total_rights,
+                   SUM(CASE WHEN mr.status='Active' THEN 1 ELSE 0 END) AS active_rights,
+                   SUM(CASE WHEN mr.status='Active'
+                       AND mr.term_to <= DATE('now','+90 days') THEN 1 ELSE 0 END) AS expiring_90d
+            FROM movie m
+            LEFT JOIN title t ON t.movie_id = m.movie_id
+            LEFT JOIN media_rights mr ON mr.title_id = t.title_id
+            WHERE 1=1 {extras_mv}
+            GROUP BY m.movie_id
+            {"HAVING active_rights > 0" if rights_only else ""}
+            ORDER BY m.box_office_gross_usd_m DESC
+        """)
+        if not mv_df.empty:
+            stat_tiles([
+                (f"{len(mv_df)}",                                       "Films",           "#0f172a"),
+                (f"${mv_df['box_office_gross_usd_m'].sum()/1000:.1f}B","Total Box Office","#1e40af"),
+                (f"{int(mv_df['active_rights'].sum())}",               "Active Rights",   "#166534"),
+                (f"{int(mv_df['expiring_90d'].sum())}",                "Expiring 90d",    "#991b1b"),
+            ])
+            c1, c2 = st.columns(2)
+            with c1:
+                st.plotly_chart(bar(mv_df.head(15),'movie_title','box_office_gross_usd_m',
+                    'Box Office Gross (USD M)', h=400, horiz=True), use_container_width=True)
+            with c2:
+                cat_grp = mv_df.groupby('content_category')['box_office_gross_usd_m'].sum().reset_index()
+                st.plotly_chart(pie(cat_grp,'content_category','box_office_gross_usd_m',
+                    'Value by Category', h=400), use_container_width=True)
+
+            # Franchise analysis
+            fr_df = mv_df[mv_df['franchise'].notna()]
+            if not fr_df.empty:
+                fr_grp = fr_df.groupby('franchise').agg(
+                    movies=('movie_id','count'), box_office=('box_office_gross_usd_m','sum')
+                ).reset_index()
+                st.markdown("#### Franchise Box Office")
+                st.plotly_chart(bar(fr_grp,'franchise','box_office','Franchise Box Office ($M)',h=260), use_container_width=True)
+
+            st.markdown("#### Film Slate")
+            mv_show = mv_df.copy()
+            mv_show['⚠ Expiring'] = mv_show['expiring_90d'].apply(lambda x: f"🔴 {int(x)}" if x and int(x)>0 else "—")
+            mv_show['Rights']     = mv_show['active_rights'].apply(lambda x: "✅" if x and int(x)>0 else "❌")
+            st.dataframe(
+                mv_show[['movie_title','content_category','genre','franchise',
+                         'box_office_gross_usd_m','age_rating','release_year',
+                         'total_rights','active_rights','Rights','⚠ Expiring']],
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "movie_title":            st.column_config.TextColumn("Film"),
+                    "content_category":       st.column_config.TextColumn("Category"),
+                    "genre":                  st.column_config.TextColumn("Genre"),
+                    "franchise":              st.column_config.TextColumn("Franchise"),
+                    "box_office_gross_usd_m": st.column_config.NumberColumn("Box Office ($M)", format="$%.0f M"),
+                    "age_rating":             st.column_config.TextColumn("Rating"),
+                    "release_year":           st.column_config.NumberColumn("Year", format="%d"),
+                    "total_rights":           st.column_config.NumberColumn("Total Rights"),
+                    "active_rights":          st.column_config.NumberColumn("Active Rights"),
+                })
+            st.download_button("📥 Export Movie Slate", mv_df.to_csv(index=False), "movies.csv", "text/csv")
+
+    with tab3:
         c1, c2 = st.columns(2)
         with c1:
             df = run(f"""
@@ -860,7 +940,7 @@ def page_dna():
                            .reset_index().sort_values('count',ascending=False))
                 st.plotly_chart(bar(terr_df.head(12),'territory','count','DNA Flags by Territory',h=280), use_container_width=True)
 
-    with tab2:
+    with tab3:
         df = run(f"""
             SELECT dna.dna_id, dna.title_name, t.series_id,
                    dna.reason_category, dna.reason_subcategory,
@@ -1038,6 +1118,12 @@ def page_chat():
                 "Rights expiring in next 90 days",
                 "PayTV rights expiring soon",
             ],
+            "Movies & Films": [
+                "Show all movies in the slate",
+                "Movies by box office revenue",
+                "Theatrical movies with active rights",
+                "Movies breakdown by genre",
+            ],
             "Do-Not-Air / Deals": [
                 "Show do-not-air restrictions",
                 "Active deals by vendor",
@@ -1065,7 +1151,7 @@ def page_chat():
             st.markdown(f"**{msg['question']}**  `{msg.get('region','')}`")
         with st.chat_message("assistant", avatar="🔑"):
             if msg.get("sql") and show_sql:
-                st.code(msg["sql"], language="sql")
+                st.markdown(f'<div class="sql-box">{html.escape(msg["sql"])}</div>', unsafe_allow_html=True)
             if msg.get("metrics"):
                 mc = st.columns(len(msg["metrics"]))
                 for c, m in zip(mc, msg["metrics"]):
@@ -1101,7 +1187,7 @@ def page_chat():
                 else:
                     # Show SQL inline immediately — no expander, no rerun needed
                     if show_sql:
-                        st.code(sql, language="sql")
+                        st.markdown(f'<div class="sql-box">{html.escape(sql)}</div>', unsafe_allow_html=True)
 
                     res_df, db_err = execute_sql(sql, DB_CONN)
 
