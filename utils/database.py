@@ -42,6 +42,36 @@ SERIES_LIST = [
     ("S019","The Boys",              "Amazon",    "Prime Video"),
     ("S020","Squid Game",            "Netflix",   "Netflix"),
 ]
+MOVIES_LIST = [
+    # (movie_id, title, source,        entity,                  genre,        franchise,     category,      box_office_M, rating, year)
+    ("M001","Dune: Part One",           "Legendary/WB",  "Warner Bros",   "Sci-Fi",     "Dune",        "Theatrical",  401,  "PG-13", 2021),
+    ("M002","Dune: Part Two",           "Legendary/WB",  "Warner Bros",   "Sci-Fi",     "Dune",        "Theatrical",  711,  "PG-13", 2024),
+    ("M003","Barbie",                   "WB",            "Warner Bros",   "Comedy",     "Mattel",      "Theatrical", 1441,  "PG-13", 2023),
+    ("M004","Oppenheimer",              "Universal/WB",  "Warner Bros",   "Historical", None,          "Theatrical",  952,  "R",     2023),
+    ("M005","The Batman",               "WB",            "Warner Bros",   "Action",     "DC",          "Theatrical",  770,  "PG-13", 2022),
+    ("M006","Aquaman and the Lost Kingdom","WB",         "Warner Bros",   "Action",     "DC",          "Theatrical",  297,  "PG-13", 2023),
+    ("M007","The Flash",                "WB",            "Warner Bros",   "Action",     "DC",          "Theatrical",  268,  "PG-13", 2023),
+    ("M008","Black Adam",               "WB",            "Warner Bros",   "Action",     "DC",          "Theatrical",  393,  "PG-13", 2022),
+    ("M009","Shazam! Fury of the Gods", "WB",            "Warner Bros",   "Action",     "DC",          "Theatrical",  134,  "PG-13", 2023),
+    ("M010","Wonka",                    "WB",            "Warner Bros",   "Fantasy",    None,          "Theatrical",  632,  "PG",    2023),
+    ("M011","Beetlejuice Beetlejuice",  "WB",            "Warner Bros",   "Comedy",     None,          "Theatrical",  449,  "PG-13", 2024),
+    ("M012","Furiosa",                  "WB",            "Warner Bros",   "Action",     "Mad Max",     "Theatrical",  173,  "R",     2024),
+    ("M013","Meg 2: The Trench",        "WB",            "Warner Bros",   "Action",     None,          "Theatrical",  396,  "PG-13", 2023),
+    ("M014","The Color Purple",         "WB/Amblin",     "Warner Bros",   "Drama",      None,          "Theatrical",  67,   "PG-13", 2023),
+    ("M015","Elvis",                    "WB",            "Warner Bros",   "Drama",      None,          "Theatrical",  287,  "PG-13", 2022),
+    ("M016","Animal Kingdom",           "HBO",           "HBO/Cinemax/HBO Max","Crime", None,          "HBO Original", 0,   "TV-MA", 2022),
+    ("M017","White Noise",              "Netflix/WB",    "Warner Bros",   "Drama",      None,          "Library",      0,   "R",     2022),
+    ("M018","The Witches",              "WB",            "Warner Bros",   "Fantasy",    None,          "Library",      27,  "PG",    2020),
+    ("M019","Tenet",                    "WB",            "Warner Bros",   "Thriller",   None,          "Library",     365,  "PG-13", 2020),
+    ("M020","Wonder Woman 1984",        "WB",            "Warner Bros",   "Action",     "DC",          "Library",     169,  "PG-13", 2020),
+    ("M021","Mortal Kombat",            "WB/New Line",   "Warner Bros",   "Action",     None,          "Library",     83,   "R",     2021),
+    ("M022","The Suicide Squad",        "WB",            "Warner Bros",   "Action",     "DC",          "Library",     167,  "R",     2021),
+    ("M023","Matrix Resurrections",     "WB",            "Warner Bros",   "Sci-Fi",     "Matrix",      "Library",     157,  "R",     2021),
+    ("M024","Space Jam: A New Legacy",  "WB",            "Warner Bros",   "Animation",  None,          "Library",     162,  "PG",    2021),
+    ("M025","Godzilla vs. Kong",        "WB/Legendary",  "Warner Bros",   "Action",     "MonsterVerse","Library",     468,  "PG-13", 2021),
+]
+CONTENT_CATEGORIES = ["Theatrical","HBO Original","Library","Direct-to-Streaming","DTV"]
+
 GENRES        = ["Drama","Thriller","Fantasy","Sci-Fi","Comedy","Action",
                  "Historical","Crime","Documentary","Horror","Animation","Reality"]
 LANGUAGES     = ["English","Spanish","French","German","Italian","Japanese",
@@ -116,15 +146,33 @@ CREATE TABLE season (
     season_title TEXT, season_number INTEGER, season_source TEXT,
     controlling_entity TEXT, episode_count INTEGER, release_year INTEGER, created_at TEXT
 );
+CREATE TABLE movie (
+    movie_id TEXT PRIMARY KEY,
+    movie_title TEXT NOT NULL,
+    movie_source TEXT,
+    controlling_entity TEXT,
+    genre TEXT, description TEXT,
+    franchise TEXT,
+    content_category TEXT,
+    theatrical_release_date TEXT,
+    box_office_gross_usd_m REAL DEFAULT 0,
+    age_rating TEXT,
+    release_year INTEGER,
+    created_at TEXT
+);
 CREATE TABLE title (
     title_id TEXT PRIMARY KEY,
     season_id TEXT REFERENCES season(season_id),
     series_id TEXT REFERENCES series(series_id),
+    movie_id TEXT REFERENCES movie(movie_id),
     title_source TEXT, title_identifier TEXT,
     episode_number INTEGER, title_type TEXT,
     title_name TEXT NOT NULL, controlling_entity TEXT,
     release_year INTEGER, description TEXT, genre TEXT,
     franchise TEXT, runtime_minutes INTEGER, age_rating TEXT,
+    content_category TEXT,
+    theatrical_release_date TEXT,
+    box_office_gross_usd_m REAL DEFAULT 0,
     region TEXT, created_at TEXT
 );
 CREATE TABLE vendors (
@@ -235,6 +283,9 @@ INDEXES_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_wo_region     ON work_orders(region)",
     "CREATE INDEX IF NOT EXISTS idx_sd_region     ON sales_deal(region)",
     "CREATE INDEX IF NOT EXISTS idx_sd_buyer      ON sales_deal(buyer)",
+    "CREATE INDEX IF NOT EXISTS idx_title_movie   ON title(movie_id)",
+    "CREATE INDEX IF NOT EXISTS idx_movie_cat     ON movie(content_category)",
+    "CREATE INDEX IF NOT EXISTS idx_movie_genre   ON movie(genre)",
 ]
 
 # ─── Seed helpers ─────────────────────────────────────────────────────────────
@@ -262,12 +313,13 @@ def _seed_hierarchy(cur):
                 tid_ctr[0] += 1
                 region = random.choice(REGIONS)
                 title_rows.append((
-                    t_id, sea_id, s_id, s_src, f"EIDR-{t_id}",
+                    t_id, sea_id, s_id, None, s_src, f"EIDR-{t_id}",
                     ep, "Episode", f"{s_title} S{sn:02d}E{ep:02d}",
                     entity, random.randint(2015,2025),
                     f"Episode {ep} of {s_title} Season {sn}.",
                     genre, None, random.randint(25,65),
                     random.choice(["TV-MA","TV-14","TV-PG","TV-G"]),
+                    "Series", None, 0,
                     region, today.strftime("%Y-%m-%d %H:%M:%S"),
                 ))
 
@@ -276,21 +328,23 @@ def _seed_hierarchy(cur):
             tid_ctr[0] += 1
             region = random.choice(REGIONS)
             title_rows.append((
-                t_id, None, s_id, s_src, f"EIDR-{t_id}",
+                t_id, None, s_id, None, s_src, f"EIDR-{t_id}",
                 None, "Special", f"{s_title} — Special",
                 entity, random.randint(2015,2025),
                 f"Standalone special for {s_title}.",
                 genre, None, random.randint(60,120),
                 random.choice(["TV-MA","TV-14","TV-PG"]),
+                "Series", None, 0,
                 region, today.strftime("%Y-%m-%d %H:%M:%S"),
             ))
 
     cur.executemany("INSERT INTO series VALUES (?,?,?,?,?,?,?,?,?)", series_rows)
     cur.executemany("INSERT INTO season VALUES (?,?,?,?,?,?,?,?,?)", season_rows)
-    cur.executemany("""INSERT INTO title (title_id,season_id,series_id,title_source,
+    cur.executemany("""INSERT INTO title (title_id,season_id,series_id,movie_id,title_source,
         title_identifier,episode_number,title_type,title_name,controlling_entity,
-        release_year,description,genre,franchise,runtime_minutes,age_rating,region,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", title_rows)
+        release_year,description,genre,franchise,runtime_minutes,age_rating,
+        content_category,theatrical_release_date,box_office_gross_usd_m,region,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", title_rows)
 
     logger.info(f"Hierarchy: {len(series_rows)} series, {len(season_rows)} seasons, {len(title_rows)} titles")
     return [r[0] for r in title_rows]
@@ -545,6 +599,71 @@ def _seed_sales(cur, title_ids):
     logger.info(f"Sales deals: {len(rows)}")
 
 
+
+def _seed_movies(cur):
+    """Seed the movie table and corresponding title records for WBD film slate."""
+    today = datetime.now()
+    movie_rows, title_rows = [], []
+    tid_ctr = [5000]  # movie title IDs start at T05000 to avoid collision
+
+    for (m_id, m_title, m_src, entity, genre, franchise,
+         category, bo_m, rating, year) in MOVIES_LIST:
+
+        # Theatrical release date (approximate)
+        release_date = f"{year}-{random.randint(1,12):02d}-{random.choice([7,14,21,28]):02d}"
+
+        movie_rows.append((
+            m_id, m_title, m_src, entity, genre,
+            f"Warner Bros / HBO Max feature film: {m_title}.",
+            franchise, category, release_date,
+            float(bo_m), rating, year,
+            today.strftime("%Y-%m-%d %H:%M:%S"),
+        ))
+
+        # Each movie gets 1–3 title records (e.g. different cuts/versions)
+        versions = ["Theatrical Cut"]
+        if random.random() > 0.5: versions.append("Director's Cut")
+        if category == "Theatrical" and random.random() > 0.6: versions.append("IMAX Version")
+        if random.random() > 0.7: versions.append("4K Remaster")
+
+        for version in versions:
+            t_id   = f"T{tid_ctr[0]:05d}"; tid_ctr[0] += 1
+            region = random.choice(REGIONS)
+            runtime = random.randint(95, 175)
+            title_rows.append((
+                t_id,
+                None,          # season_id — NULL for movies
+                None,          # series_id — NULL for movies
+                m_id,          # movie_id  — FK to movie table
+                m_src, f"EIDR-{t_id}",
+                None,          # episode_number — NULL for movies
+                "Movie",       # title_type
+                f"{m_title} ({version})" if version != "Theatrical Cut" else m_title,
+                entity, year,
+                f"{m_title} — {version}. {category} release.",
+                genre, franchise, runtime, rating,
+                category,      # content_category
+                release_date,  # theatrical_release_date
+                float(bo_m),   # box_office_gross_usd_m
+                region,
+                today.strftime("%Y-%m-%d %H:%M:%S"),
+            ))
+
+    cur.executemany("""INSERT INTO movie (movie_id,movie_title,movie_source,
+        controlling_entity,genre,description,franchise,content_category,
+        theatrical_release_date,box_office_gross_usd_m,age_rating,
+        release_year,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", movie_rows)
+
+    cur.executemany("""INSERT INTO title (title_id,season_id,series_id,movie_id,title_source,
+        title_identifier,episode_number,title_type,title_name,controlling_entity,
+        release_year,description,genre,franchise,runtime_minutes,age_rating,
+        content_category,theatrical_release_date,box_office_gross_usd_m,region,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", title_rows)
+
+    logger.info(f"Movies: {len(movie_rows)} films, {len(title_rows)} title records seeded")
+    return [r[0] for r in title_rows]
+
+
 # ─── Public API ───────────────────────────────────────────────────────────────
 def init_database(db_path="foundry.db"):
     db   = DatabaseManager(db_path)
@@ -554,7 +673,7 @@ def init_database(db_path="foundry.db"):
         cur.execute("BEGIN TRANSACTION")
         for tbl in ["exhibition_restrictions","media_rights","content_deal",
                     "elemental_rights","elemental_deal","do_not_air",
-                    "sales_deal","work_orders","deals","vendors","title","season","series"]:
+                    "sales_deal","work_orders","deals","vendors","title","season","series","movie"]:
             cur.execute(f"DROP TABLE IF EXISTS {tbl}")
 
         for stmt in SCHEMA_SQL.strip().split(";"):
@@ -562,14 +681,16 @@ def init_database(db_path="foundry.db"):
             if s:
                 cur.execute(s)
 
-        title_ids = _seed_hierarchy(cur)
+        title_ids       = _seed_hierarchy(cur)
+        movie_title_ids = _seed_movies(cur)
+        all_title_ids   = title_ids + movie_title_ids  # combined for rights seeding
         _seed_vendors(cur)
         _seed_deals(cur)
-        _seed_work_orders(cur, title_ids)
-        _seed_content_deals(cur, title_ids)
-        _seed_elemental(cur, title_ids)
-        _seed_dna(cur, title_ids)
-        _seed_sales(cur, title_ids)
+        _seed_work_orders(cur, all_title_ids)
+        _seed_content_deals(cur, all_title_ids)
+        _seed_elemental(cur, all_title_ids)
+        _seed_dna(cur, all_title_ids)
+        _seed_sales(cur, all_title_ids)
 
         cur.execute("COMMIT")
         for idx in INDEXES_SQL:
@@ -593,7 +714,7 @@ def execute_sql(sql: str, conn) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
 
 def get_table_stats(conn) -> dict:
     stats = {}
-    for t in ["series","season","title","content_deal","media_rights",
+    for t in ["series","season","title","movie","content_deal","media_rights",
               "elemental_rights","do_not_air","sales_deal","deals","work_orders"]:
         try:
             df = pd.read_sql_query(f"SELECT COUNT(*) AS c FROM {t}", conn)
