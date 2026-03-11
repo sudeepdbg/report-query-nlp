@@ -677,7 +677,13 @@ def page_rights():
                     "Holdback":                st.column_config.TextColumn("Holdback 🔒"),
                     "status":                  st.column_config.TextColumn("Status"),
                 })
-            st.download_button("📥 Export CSV", df.to_csv(index=False), f"rights_{reg}.csv", "text/csv")
+            st.download_button(
+    label="📥 Export CSV",
+    data=df.to_csv(index=False),
+    file_name=f"vendors_{reg}.csv",
+    mime="text/csv",
+    key=f"dl_btn_{reg.lower()}_{active_region.lower()}" # Unique key prevents ID collision
+)
 
 
 # ════════════════════════════════════════════════════════════════════════════════
