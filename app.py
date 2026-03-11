@@ -417,16 +417,31 @@ def page_rights():
                 st.markdown(f"**Total: {len(exp_df)}**")
                 st.markdown("**Exclusive:** " + str(int(exp_df['exclusivity'].sum())))
 
-            # Formatted table
+            # Formatted table — clean readable column labels
             show = exp_df.copy()
-            show['⏰ Days'] = show['days_remaining'].apply(exp_tag)
-            show['Excl']   = show['exclusivity'].apply(bool_icon)
-            show['Hold']   = show['holdback'].apply(bool_icon)
+            show['Days Left']    = show['days_remaining'].apply(exp_tag)
+            show['Exclusive']    = show['exclusivity'].apply(bool_icon)
+            show['Holdback']     = show['holdback'].apply(bool_icon)
+            show['Restrictions'] = show['notes_restrictive'].fillna('—')
             st.dataframe(
                 show[['title_name','series_id','deal_source','media_platform_primary',
-                       'territories','language','expiry_date','⏰ Days','Excl','Hold',
-                       'notes_restrictive']],
-                use_container_width=True, hide_index=True)
+                       'territories','language','expiry_date','Days Left',
+                       'Exclusive','Holdback','holdback_days','Restrictions']],
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "title_name":             st.column_config.TextColumn("Title"),
+                    "series_id":              st.column_config.TextColumn("Series"),
+                    "deal_source":            st.column_config.TextColumn("Source"),
+                    "media_platform_primary": st.column_config.TextColumn("Platform"),
+                    "territories":            st.column_config.TextColumn("Territories"),
+                    "language":               st.column_config.TextColumn("Language"),
+                    "expiry_date":            st.column_config.TextColumn("Expiry Date"),
+                    "Days Left":              st.column_config.TextColumn("⏰ Days Left"),
+                    "Exclusive":              st.column_config.TextColumn("Exclusive ⭐"),
+                    "Holdback":               st.column_config.TextColumn("Holdback 🔒"),
+                    "holdback_days":          st.column_config.NumberColumn("Holdback Days"),
+                    "Restrictions":           st.column_config.TextColumn("Restrictions"),
+                })
             csv = exp_df.to_csv(index=False)
             st.download_button("📥 Export Expiry Report", csv, f"expiry_{reg}_{days_sel}d.csv", "text/csv")
 
@@ -634,16 +649,33 @@ def page_rights():
         """)
         if not df.empty:
             show = df.copy()
-            show['⏰'] = show['days_remaining'].apply(exp_tag)
-            show['Excl'] = show['exclusivity'].apply(bool_icon)
-            show['Hold'] = show['holdback'].apply(bool_icon)
+            show['Days Left']  = show['days_remaining'].apply(exp_tag)
+            show['Exclusive']  = show['exclusivity'].apply(bool_icon)
+            show['Holdback']   = show['holdback'].apply(bool_icon)
             st.caption(f"{len(df)} rights records")
             st.dataframe(
                 show[['title_name','series_id','deal_source','rights_type',
                        'media_platform_primary','media_platform_ancillary',
                        'territories','language','brand',
-                       'term_from','term_to','⏰','Excl','Hold','status']],
-                use_container_width=True, hide_index=True)
+                       'term_from','term_to','Days Left','Exclusive','Holdback','status']],
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "title_name":              st.column_config.TextColumn("Title"),
+                    "series_id":               st.column_config.TextColumn("Series"),
+                    "deal_source":             st.column_config.TextColumn("Source"),
+                    "rights_type":             st.column_config.TextColumn("Rights Type"),
+                    "media_platform_primary":  st.column_config.TextColumn("Platform"),
+                    "media_platform_ancillary":st.column_config.TextColumn("Ancillary"),
+                    "territories":             st.column_config.TextColumn("Territories"),
+                    "language":                st.column_config.TextColumn("Languages"),
+                    "brand":                   st.column_config.TextColumn("Brand"),
+                    "term_from":               st.column_config.TextColumn("Start Date"),
+                    "term_to":                 st.column_config.TextColumn("End Date"),
+                    "Days Left":               st.column_config.TextColumn("⏰ Days Left"),
+                    "Exclusive":               st.column_config.TextColumn("Exclusive ⭐"),
+                    "Holdback":                st.column_config.TextColumn("Holdback 🔒"),
+                    "status":                  st.column_config.TextColumn("Status"),
+                })
             st.download_button("📥 Export CSV", df.to_csv(index=False), f"rights_{reg}.csv", "text/csv")
 
 
