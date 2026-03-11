@@ -141,7 +141,21 @@ class QueryParser:
     def generate_sql(cls, question: str, selected_region: str
                      ) -> Tuple[Optional[str], Optional[str], str, str]:
         q        = question.lower().strip()
-        regions  = _extract_regions(q) or [selected_region]
+
+        # Sidebar region is the primary context.
+        # Query text may mention a different region explicitly — honour it only
+        # if it differs from the sidebar AND the query clearly refers to that
+        # region as the target (e.g. "in APAC", "for EMEA"). Otherwise sidebar wins.
+        text_regions = _extract_regions(q)
+        if text_regions and text_regions != [selected_region]:
+            # Only override if user explicitly wrote "in X" or "for X" or "X region"
+            explicit = any(f"in {r.lower()}" in q or f"for {r.lower()}" in q
+                           or f"{r.lower()} region" in q
+                           for r in text_regions)
+            regions = text_regions if explicit else [selected_region]
+        else:
+            regions = [selected_region]
+
         region_ctx = " vs ".join(regions)
         rw       = _region_where(regions)
         rw_mr    = _region_where(regions, "mr.region")
