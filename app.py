@@ -301,15 +301,15 @@ with st.sidebar:
         ("media_rights", "Rights"),
         ("do_not_air",   "DNA"),
     ]
-    html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin:10px 8px">'
+    _sidebar_html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin:10px 8px">'
     for key, lbl in stat_pairs:
-        html += (f'<div style="background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.07);'
+        _sidebar_html += (f'<div style="background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.07);'
                  f'border-radius:8px;padding:8px;text-align:center">'
                  f'<div style="font-size:1.1rem;font-weight:800;color:#e2e8f0">{stats.get(key,0):,}</div>'
                  f'<div style="font-size:.58rem;color:#475569;text-transform:uppercase;letter-spacing:.06em">{lbl}</div>'
                  f'</div>')
-    html += '</div>'
-    st.markdown(html, unsafe_allow_html=True)
+    _sidebar_html += '</div>'
+    st.markdown(_sidebar_html, unsafe_allow_html=True)
 
     # Context note
     st.markdown(
