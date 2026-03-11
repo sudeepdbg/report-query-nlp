@@ -1079,11 +1079,11 @@ def page_work_orders():
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# CHAT / QUERY conversational interface
+# CHAT / QUERY — Rights Explorer conversational interface
 # ════════════════════════════════════════════════════════════════════════════════
 def page_chat():
     reg = st.session_state.current_region
-    st.markdown('<div class="page-header">💬 Chat Query </div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-header">💬 Chat Query — Rights Explorer</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="page-sub">Natural language rights interrogation · {reg} · Ask about titles, rights windows, expiry, DNA, territories, exclusivity</div>', unsafe_allow_html=True)
 
 
