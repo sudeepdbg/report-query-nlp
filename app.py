@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 import logging
 from typing import Optional
 
-from utils.database import init_database, execute_sql, get_table_stats
+from utils.database import init_database, execute_sql, get_table_stats, save_alert, dismiss_alert, get_alerts
 from utils.query_parser import parse_query
 
 logging.basicConfig(level=logging.INFO)
@@ -159,6 +159,9 @@ for k, v in {
     'user_prefs': {'show_sql': True, 'raw_sql_mode': False},
     'db_stats': {},
     'pending_prompt': None,
+    'title_360': None,
+    'compare_region': None,
+    'alerts_count': 0,
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -180,6 +183,10 @@ PAGES = [
     ("deals",       "💼", "Deals"),
     ("vendors",     "🏢", "Vendors"),
     ("work_orders", "⚙️",  "Work Orders"),
+    ("gap_analysis","🔍", "Gap Analysis"),
+    ("compare",     "⚖️",  "Compare Regions"),
+    ("alerts",      "🔔", "Alerts"),
+    ("title_360",   "🎯", "Title 360"),
     ("chat",        "💬", "Chat / Query"),
 ]
 
@@ -295,6 +302,10 @@ with st.sidebar:
 
     # DB stats
     stats = st.session_state.db_stats
+    # Refresh alerts count
+    alerts_live, _ = get_alerts(DB_CONN, region=st.session_state.current_region)
+    st.session_state.alerts_count = len(alerts_live) if alerts_live is not None else 0
+
     stat_pairs = [
         ("title",        "Titles"),
         ("movie",        "Movies"),
@@ -310,6 +321,15 @@ with st.sidebar:
                  f'</div>')
     _sidebar_html += '</div>'
     st.markdown(_sidebar_html, unsafe_allow_html=True)
+
+    # Alerts badge
+    ac = st.session_state.alerts_count
+    if ac > 0:
+        st.markdown(
+            f'<div style="margin:0 8px 4px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);'
+            f'border-radius:8px;padding:6px 10px;font-size:.75rem;color:#fca5a5;cursor:pointer">'
+            f'🔔 <b>{ac} active alert{"s" if ac!=1 else ""}</b> — click Alerts in nav</div>',
+            unsafe_allow_html=True)
 
     # Context note
     st.markdown(
@@ -444,7 +464,24 @@ def page_rights():
                     "Restrictions":           st.column_config.TextColumn("Restrictions"),
                 })
             csv = exp_df.to_csv(index=False)
-            st.download_button("📥 Export Expiry Report", csv, f"expiry_{reg}_{days_sel}d.csv", "text/csv")
+            ca, cb = st.columns([3,1])
+            ca.download_button("📥 Export Expiry Report", csv, f"expiry_{reg}_{days_sel}d.csv", "text/csv")
+            with cb:
+                plat_label = f"{', '.join(plat_sel) if plat_sel else 'All'}"
+                if st.button(f"🔔 Set Alert — {days_sel}d / {plat_label}", key="set_exp_alert", type="secondary"):
+                    _, err = save_alert(
+                        DB_CONN,
+                        alert_type  = "Expiry",
+                        label       = f"Rights expiring within {days_sel} days ({plat_label}) [{reg}]",
+                        region      = reg,
+                        platform    = plat_label,
+                        days_threshold = days_sel,
+                        persona     = st.session_state.persona,
+                    )
+                    if err: st.error(f"Alert save failed: {err}")
+                    else:
+                        st.success("🔔 Alert saved! View on the Alerts page.")
+                        st.session_state.alerts_count += 1
 
     # ── Windows & Platforms ───────────────────────────────────────────────────
     with tab2:
@@ -860,9 +897,11 @@ def page_titles():
                     'platforms','exclusive','active_rights','⚠ Expiring','dna_status']],
                 use_container_width=True, hide_index=True)
 
-    with tab3:
+    with tab4:
         search_q = st.text_input("Search title name", placeholder="e.g. House of the Dragon, Succession…", key="title_search")
+        # Use parameterised LIKE via Python-side sanitisation (no f-string user input in SQL)
         if search_q:
+            safe_q = search_q.replace("'", "''").replace(";", "").replace("--", "")[:200]
             df = run(f"""
                 SELECT t.title_id, t.title_name, t.title_type, t.genre,
                        t.release_year, t.controlling_entity, t.age_rating,
@@ -872,12 +911,20 @@ def page_titles():
                 LEFT JOIN season se ON t.season_id = se.season_id
                 LEFT JOIN series s  ON t.series_id = s.series_id
                 LEFT JOIN media_rights mr ON t.title_id = mr.title_id
-                WHERE LOWER(t.title_name) LIKE '%{search_q.lower()}%'
+                WHERE LOWER(t.title_name) LIKE '%{safe_q.lower()}%'
                 GROUP BY t.title_id ORDER BY s.series_title, se.season_number, t.episode_number
                 LIMIT 100
             """)
             if not df.empty:
                 st.caption(f"{len(df)} results")
+                # Title 360 drilldown button
+                st.markdown("**💡 Click a title below, then press** **View Title 360 ▶** to see full detail.")
+                selected_title = st.selectbox("Select title to view", ["—"] + df['title_name'].tolist(), key="search_360_sel")
+                if selected_title != "—":
+                    if st.button(f"🔍 View Title 360 — {selected_title}", key="search_360_btn"):
+                        st.session_state.title_360 = selected_title
+                        st.session_state.page = "title_360"
+                        st.rerun()
                 st.dataframe(df, use_container_width=True, hide_index=True)
             else:
                 st.warning("No titles found.")
@@ -1365,7 +1412,8 @@ LIMIT 100""",
                                     {"label":"Records", "value":f"{len(res_df):,}"},
                                     {"label":"Max",     "value":f"{res_df[vc].max():,.0f}"},
                                 ]
-                            except: pass
+                            except (ValueError, TypeError) as _metric_err:
+                                logger.debug(f"Metrics render skipped: {_metric_err}")
 
                         # Chart
                         fig = None
@@ -1374,7 +1422,7 @@ LIMIT 100""",
                             y_col = next((c for c in res_df.columns[1:]
                                           if pd.api.types.is_numeric_dtype(res_df[c])), res_df.columns[1])
                             try: res_df[y_col] = pd.to_numeric(res_df[y_col], errors='coerce')
-                            except: pass
+                            except (ValueError, TypeError): pass
                             fig = bar(res_df.head(30), x_col, y_col, active_prompt[:60])
                         elif chart_type == 'pie' and len(res_df.columns) >= 2:
                             fig = pie(res_df, res_df.columns[0], res_df.columns[1], active_prompt[:60])
@@ -1546,9 +1594,12 @@ def page_deals():
         if not df.empty:
             # Colour-code expiry
             today_str = datetime.now().strftime("%Y-%m-%d")
-            df['⏰ Expiry'] = df['expiry_date'].apply(
-                lambda d: exp_tag((datetime.strptime(d, "%Y-%m-%d") - datetime.now()).days)
-                if d else "—")
+            def _safe_exp(d):
+                try:
+                    return exp_tag((datetime.strptime(str(d), "%Y-%m-%d") - datetime.now()).days)
+                except (ValueError, TypeError):
+                    return "—"
+            df['⏰ Expiry'] = df['expiry_date'].apply(_safe_exp)
             st.caption(f"{len(df)} deals")
             st.dataframe(
                 df[['deal_id','deal_name','vendor_name','deal_type',
@@ -1710,5 +1761,650 @@ def page_vendors():
     "deals":       page_deals,
     "vendors":     page_vendors,
     "work_orders": page_work_orders,
+    "gap_analysis":page_gap_analysis,
+    "compare":     page_compare,
+    "alerts":      page_alerts,
+    "title_360":   page_title_360,
     "chat":        page_chat,
 }.get(st.session_state.page, page_rights)()
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# RIGHTS GAP ANALYSIS — Feature 17
+# "Which titles have NO active rights in region X for platform Y?"
+# ════════════════════════════════════════════════════════════════════════════════
+def page_gap_analysis():
+    reg = st.session_state.current_region
+    st.markdown('<div class="page-header">🔍 Rights Gap Analysis</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="page-sub">Titles with <b>missing or expired rights</b> — '
+        f'identify coverage gaps for licensing decisions · {reg}</div>',
+        unsafe_allow_html=True)
+
+    # ── Filters ──────────────────────────────────────────────────────────────
+    c1, c2, c3 = st.columns(3)
+    gap_plat  = c1.selectbox("Platform", ["All","PayTV","STB-VOD","SVOD","FAST"], key="gap_plat")
+    gap_type  = c2.selectbox("Title Type", ["All","Episode","Movie","Special"],   key="gap_type")
+    gap_genre = c3.selectbox("Genre",      ["All"] + ["Drama","Thriller","Fantasy","Sci-Fi",
+                              "Comedy","Action","Historical","Crime","Animation"], key="gap_genre")
+
+    plat_cond  = f"AND mr.media_platform_primary = '{gap_plat}'" if gap_plat != "All" else ""
+    type_cond  = f"AND t.title_type = '{gap_type}'"              if gap_type != "All" else ""
+    genre_cond = f"AND t.genre = '{gap_genre}'"                  if gap_genre != "All" else ""
+
+    st.divider()
+    tab_a, tab_b, tab_c = st.tabs(["❌ No Active Rights", "⏰ Expiring — No Renewal", "📊 Coverage Heatmap"])
+
+    with tab_a:
+        st.markdown("#### Titles with zero active rights in this region/platform")
+        no_rights_df = run(f"""
+            SELECT t.title_name, t.title_type, t.genre, t.controlling_entity,
+                   t.content_category,
+                   COUNT(mr.rights_id)                                         AS total_rights,
+                   SUM(CASE WHEN mr.status='Active'   THEN 1 ELSE 0 END)      AS active_rights,
+                   SUM(CASE WHEN mr.status='Expired'  THEN 1 ELSE 0 END)      AS expired_rights,
+                   MAX(mr.term_to)                                              AS last_rights_end,
+                   s.series_title
+            FROM title t
+            LEFT JOIN media_rights mr ON t.title_id = mr.title_id
+              AND UPPER(mr.region) = '{reg}' {plat_cond}
+            LEFT JOIN season se ON t.season_id = se.season_id
+            LEFT JOIN series  s ON t.series_id = s.series_id
+            WHERE UPPER(t.region) = '{reg}' {type_cond} {genre_cond}
+            GROUP BY t.title_id
+            HAVING active_rights = 0
+            ORDER BY expired_rights DESC, t.title_name
+            LIMIT 200
+        """)
+        if no_rights_df.empty:
+            st.success(f"✅ All titles have active rights in {reg}" +
+                       (f" on {gap_plat}" if gap_plat != "All" else "") + ".")
+        else:
+            stat_tiles([
+                (f"{len(no_rights_df):,}",
+                 f"Titles with no active rights{' on '+gap_plat if gap_plat!='All' else ''}",
+                 "#991b1b"),
+                (f"{int(no_rights_df['expired_rights'].sum()):,}",
+                 "Previously Had Rights (now expired)", "#92400e"),
+                (f"{int((no_rights_df['total_rights']==0).sum()):,}",
+                 "Never Had Rights", "#64748b"),
+            ])
+            # Bar: top series with most gap titles
+            series_gap = (no_rights_df.dropna(subset=['series_title'])
+                          .groupby('series_title').size().reset_index(name='gap_titles')
+                          .sort_values('gap_titles', ascending=False).head(15))
+            if not series_gap.empty:
+                st.plotly_chart(bar(series_gap,'series_title','gap_titles',
+                    'Series with Most Rights Gaps',h=280,horiz=True), use_container_width=True)
+            no_rights_df['Last Rights'] = no_rights_df['last_rights_end'].fillna('Never')
+            no_rights_df['Status'] = no_rights_df['total_rights'].apply(
+                lambda x: '🆕 Never Licensed' if x == 0 else '🔴 Expired / Lapsed')
+            st.dataframe(
+                no_rights_df[['title_name','title_type','genre','controlling_entity',
+                              'content_category','total_rights','expired_rights',
+                              'Last Rights','Status','series_title']],
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "title_name":       st.column_config.TextColumn("Title"),
+                    "title_type":       st.column_config.TextColumn("Type"),
+                    "genre":            st.column_config.TextColumn("Genre"),
+                    "controlling_entity":st.column_config.TextColumn("Entity"),
+                    "content_category": st.column_config.TextColumn("Category"),
+                    "total_rights":     st.column_config.NumberColumn("Total Rights"),
+                    "expired_rights":   st.column_config.NumberColumn("Expired"),
+                    "Last Rights":      st.column_config.TextColumn("Last Rights End"),
+                    "Status":           st.column_config.TextColumn("Gap Status"),
+                    "series_title":     st.column_config.TextColumn("Series"),
+                })
+            st.download_button("📥 Export Gap Report", no_rights_df.to_csv(index=False),
+                               f"gap_{reg}_{gap_plat}.csv", "text/csv")
+
+            # Set Alert on gap
+            if st.button("🔔 Alert me when rights are added for these titles", key="gap_alert_btn"):
+                _, err = save_alert(DB_CONN, "Gap", f"Rights gap — {len(no_rights_df)} titles, {gap_plat} [{reg}]",
+                                    region=reg, platform=gap_plat, persona=st.session_state.persona)
+                if not err: st.success("🔔 Gap alert saved!")
+
+    with tab_b:
+        st.markdown("#### Active rights expiring soon with no sales renewal in place")
+        no_renewal_df = run(f"""
+            SELECT mr.title_name,
+                   mr.media_platform_primary                                   AS platform,
+                   mr.term_to                                                  AS rights_expiry,
+                   CAST(JULIANDAY(mr.term_to)-JULIANDAY('now') AS INTEGER)     AS days_left,
+                   mr.rights_type, mr.exclusivity,
+                   sd.sales_deal_id                                            AS has_sales_deal,
+                   sd.buyer, sd.status                                         AS sales_status,
+                   CASE WHEN sd.sales_deal_id IS NULL THEN '🆘 No Renewal'
+                        ELSE '⚠ Check Sale' END                               AS renewal_risk
+            FROM media_rights mr
+            LEFT JOIN sales_deal sd ON mr.title_id = sd.title_id
+              AND UPPER(sd.region) = '{reg}' AND sd.status = 'Active'
+            WHERE UPPER(mr.region) = '{reg}' AND mr.status = 'Active'
+              AND mr.term_to <= DATE('now', '+180 days')
+              AND mr.term_to >= DATE('now')
+              {plat_cond}
+            ORDER BY days_left ASC
+            LIMIT 200
+        """)
+        if not no_renewal_df.empty:
+            no_sale = no_renewal_df[no_renewal_df['has_sales_deal'].isna()]
+            stat_tiles([
+                (f"{len(no_renewal_df):,}", "Rights Expiring in 180 Days",  "#92400e"),
+                (f"{len(no_sale):,}",        "No Active Sales Deal in Place","#991b1b"),
+                (f"{len(no_renewal_df)-len(no_sale):,}","Has Active Sale",  "#166534"),
+            ])
+            st.plotly_chart(
+                bar(no_renewal_df.groupby('platform').size().reset_index(name='count'),
+                    'platform','count','Expiring Rights by Platform',h=260),
+                use_container_width=True)
+            st.dataframe(no_renewal_df[['title_name','platform','rights_expiry','days_left',
+                                        'rights_type','exclusivity','buyer','sales_status','renewal_risk']],
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "title_name":   st.column_config.TextColumn("Title"),
+                    "platform":     st.column_config.TextColumn("Platform"),
+                    "rights_expiry":st.column_config.TextColumn("Expiry"),
+                    "days_left":    st.column_config.NumberColumn("Days Left"),
+                    "exclusivity":  st.column_config.CheckboxColumn("Exclusive"),
+                    "buyer":        st.column_config.TextColumn("Buyer (if any)"),
+                    "sales_status": st.column_config.TextColumn("Sale Status"),
+                    "renewal_risk": st.column_config.TextColumn("Risk"),
+                })
+
+    with tab_c:
+        st.markdown("#### Rights coverage by genre × platform — spot missing intersections")
+        heat_df = run(f"""
+            SELECT t.genre,
+                   mr.media_platform_primary AS platform,
+                   COUNT(DISTINCT t.title_id) AS titles_covered,
+                   SUM(CASE WHEN mr.status='Active' THEN 1 ELSE 0 END) AS active_rights
+            FROM title t
+            LEFT JOIN media_rights mr ON t.title_id = mr.title_id
+              AND UPPER(mr.region) = '{reg}'
+            WHERE UPPER(t.region) = '{reg}' AND t.genre IS NOT NULL
+              AND mr.media_platform_primary IS NOT NULL
+            GROUP BY t.genre, mr.media_platform_primary
+        """)
+        if not heat_df.empty:
+            pivot = heat_df.pivot_table(index='genre', columns='platform',
+                                        values='active_rights', aggfunc='sum', fill_value=0)
+            fig = go.Figure(data=go.Heatmap(
+                z=pivot.values.tolist(),
+                x=pivot.columns.tolist(),
+                y=pivot.index.tolist(),
+                colorscale='Purples',
+                text=pivot.values.tolist(),
+                texttemplate="%{text}",
+                hoverongaps=False,
+                showscale=True,
+            ))
+            fig.update_layout(**PT, height=400, title=f"Active Rights — Genre × Platform [{reg}]",
+                              xaxis_title="Platform", yaxis_title="Genre")
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption("Zero (blank/dark) cells = no active rights for that genre/platform combination in this region.")
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# COMPARE REGIONS — Feature 18
+# Side-by-side key metrics across two regions
+# ════════════════════════════════════════════════════════════════════════════════
+def page_compare():
+    st.markdown('<div class="page-header">⚖️ Compare Regions</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-sub">Side-by-side rights, DNA, sales and content coverage across two markets</div>', unsafe_allow_html=True)
+
+    regions_all = ["NA","APAC","EMEA","LATAM"]
+    c1, c2 = st.columns(2)
+    reg_a = c1.selectbox("Region A", regions_all, index=0, key="cmp_a")
+    reg_b = c2.selectbox("Region B", regions_all, index=2, key="cmp_b")
+
+    if reg_a == reg_b:
+        st.warning("Select two different regions to compare.")
+        return
+
+    st.divider()
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Rights Overview","🚫 DNA","💸 Sales","🎬 Content"])
+
+    def _kpi(reg):
+        return run(f"""
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN status='Active'  THEN 1 ELSE 0 END) AS active,
+                   SUM(CASE WHEN status='Expired' THEN 1 ELSE 0 END) AS expired,
+                   SUM(CASE WHEN term_to <= DATE('now','+30 days')
+                       AND status='Active' THEN 1 ELSE 0 END)        AS exp30,
+                   SUM(CASE WHEN term_to <= DATE('now','+90 days')
+                       AND status='Active' THEN 1 ELSE 0 END)        AS exp90,
+                   SUM(exclusivity)                                   AS exclusive,
+                   COUNT(DISTINCT title_id)                          AS titles_covered
+            FROM media_rights WHERE UPPER(region)='{reg}'
+        """)
+
+    with tab1:
+        ka, kb = _kpi(reg_a), _kpi(reg_b)
+        if ka.empty or kb.empty:
+            st.warning("No data"); return
+        ra, rb = ka.iloc[0], kb.iloc[0]
+
+        # KPI comparison grid
+        metrics = [
+            ("Total Rights",    "total"),
+            ("Active",          "active"),
+            ("⚠ Expiring 30d", "exp30"),
+            ("Expiring 90d",    "exp90"),
+            ("Exclusive",       "exclusive"),
+            ("Titles Covered",  "titles_covered"),
+        ]
+        cols = st.columns(len(metrics))
+        for col, (lbl, key) in zip(cols, metrics):
+            va, vb = int(ra.get(key,0)), int(rb.get(key,0))
+            delta = va - vb
+            col.metric(f"{lbl}", f"{reg_a}: {va:,}", delta=f"vs {reg_b}: {vb:,}",
+                       delta_color="off")
+
+        # Grouped bar: platform distribution
+        for reg, clr in [(reg_a,'#7c3aed'),(reg_b,'#f59e0b')]:
+            df = run(f"""
+                SELECT media_platform_primary AS platform, COUNT(*) AS rights
+                FROM media_rights WHERE UPPER(region)='{reg}' AND status='Active'
+                GROUP BY platform
+            """)
+            df['region'] = reg
+            if reg == reg_a: df_a = df
+            else: df_b = df
+
+        if not df_a.empty and not df_b.empty:
+            combined = pd.concat([df_a, df_b])
+            fig = px.bar(combined, x='platform', y='rights', color='region', barmode='group',
+                         title=f"Active Rights by Platform — {reg_a} vs {reg_b}",
+                         color_discrete_map={reg_a:'#7c3aed', reg_b:'#f59e0b'})
+            fig.update_layout(**PT, height=320)
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Exclusivity compare
+        for reg in [reg_a, reg_b]:
+            df = run(f"""
+                SELECT media_platform_primary AS platform,
+                       SUM(exclusivity) AS exclusive, COUNT(*)-SUM(exclusivity) AS non_exclusive
+                FROM media_rights WHERE UPPER(region)='{reg}'
+                GROUP BY platform
+            """)
+            df['region'] = reg
+            if reg == reg_a: excl_a = df
+            else: excl_b = df
+
+        if not excl_a.empty and not excl_b.empty:
+            excl_all = pd.concat([excl_a, excl_b])
+            fig2 = px.bar(excl_all, x='platform', y='exclusive', color='region', barmode='group',
+                          title=f"Exclusive Rights by Platform — {reg_a} vs {reg_b}",
+                          color_discrete_map={reg_a:'#7c3aed', reg_b:'#f59e0b'})
+            fig2.update_layout(**PT, height=300)
+            st.plotly_chart(fig2, use_container_width=True)
+
+    with tab2:
+        da = run(f"SELECT reason_category AS cat, COUNT(*) AS n FROM do_not_air WHERE UPPER(region)='{reg_a}' AND active=1 GROUP BY cat")
+        db = run(f"SELECT reason_category AS cat, COUNT(*) AS n FROM do_not_air WHERE UPPER(region)='{reg_b}' AND active=1 GROUP BY cat")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f"#### 🚫 {reg_a} DNA")
+            if not da.empty:
+                st.metric("Total DNA Records", f"{da['n'].sum():,}")
+                st.plotly_chart(pie(da,'cat','n',f'DNA — {reg_a}',h=280), use_container_width=True)
+        with c2:
+            st.markdown(f"#### 🚫 {reg_b} DNA")
+            if not db.empty:
+                st.metric("Total DNA Records", f"{db['n'].sum():,}")
+                st.plotly_chart(pie(db,'cat','n',f'DNA — {reg_b}',h=280), use_container_width=True)
+
+        # Overlap: titles with DNA in BOTH regions
+        overlap = run(f"""
+            SELECT DISTINCT a.title_name
+            FROM do_not_air a
+            JOIN do_not_air b ON a.title_id = b.title_id
+            WHERE UPPER(a.region)='{reg_a}' AND UPPER(b.region)='{reg_b}'
+              AND a.active=1 AND b.active=1
+        """)
+        if not overlap.empty:
+            st.markdown(f"**{len(overlap)} titles flagged in BOTH {reg_a} and {reg_b}:**")
+            st.dataframe(overlap, use_container_width=True, hide_index=True)
+
+    with tab3:
+        sa = run(f"SELECT buyer, SUM(deal_value) AS val, COUNT(*) AS n FROM sales_deal WHERE UPPER(region)='{reg_a}' AND status='Active' GROUP BY buyer ORDER BY val DESC LIMIT 10")
+        sb = run(f"SELECT buyer, SUM(deal_value) AS val, COUNT(*) AS n FROM sales_deal WHERE UPPER(region)='{reg_b}' AND status='Active' GROUP BY buyer ORDER BY val DESC LIMIT 10")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f"#### 💸 {reg_a} — Top Buyers")
+            if not sa.empty:
+                st.metric("Active Deal Value", fmt_m(sa['val'].sum()))
+                st.plotly_chart(bar(sa,'buyer','val',f'Sales — {reg_a}',h=300,horiz=True), use_container_width=True)
+        with c2:
+            st.markdown(f"#### 💸 {reg_b} — Top Buyers")
+            if not sb.empty:
+                st.metric("Active Deal Value", fmt_m(sb['val'].sum()))
+                st.plotly_chart(bar(sb,'buyer','val',f'Sales — {reg_b}',h=300,horiz=True), use_container_width=True)
+
+    with tab4:
+        ta = run(f"SELECT genre, COUNT(*) AS titles FROM title WHERE UPPER(region)='{reg_a}' GROUP BY genre ORDER BY titles DESC")
+        tb = run(f"SELECT genre, COUNT(*) AS titles FROM title WHERE UPPER(region)='{reg_b}' GROUP BY genre ORDER BY titles DESC")
+        if not ta.empty and not tb.empty:
+            ta['region'] = reg_a; tb['region'] = reg_b
+            combined = pd.concat([ta, tb])
+            fig = px.bar(combined, x='genre', y='titles', color='region', barmode='group',
+                         title=f"Content by Genre — {reg_a} vs {reg_b}",
+                         color_discrete_map={reg_a:'#7c3aed', reg_b:'#f59e0b'})
+            fig.update_layout(**PT, height=320)
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Title type breakdown
+        tta = run(f"SELECT title_type, COUNT(*) AS n FROM title WHERE UPPER(region)='{reg_a}' GROUP BY title_type")
+        ttb = run(f"SELECT title_type, COUNT(*) AS n FROM title WHERE UPPER(region)='{reg_b}' GROUP BY title_type")
+        c1, c2 = st.columns(2)
+        with c1:
+            if not tta.empty: st.plotly_chart(pie(tta,'title_type','n',f'Types — {reg_a}',h=260), use_container_width=True)
+        with c2:
+            if not ttb.empty: st.plotly_chart(pie(ttb,'title_type','n',f'Types — {reg_b}',h=260), use_container_width=True)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# ALERTS PAGE — Feature 15
+# ════════════════════════════════════════════════════════════════════════════════
+def page_alerts():
+    reg = st.session_state.current_region
+    st.markdown('<div class="page-header">🔔 Alerts & Saved Filters</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="page-sub">Rights expiry alerts and gap notifications · {reg}</div>', unsafe_allow_html=True)
+
+    alerts_df, err = get_alerts(DB_CONN, region=reg)
+    if err:
+        st.error(f"Error loading alerts: {err}")
+        return
+
+    # KPIs
+    total     = len(alerts_df)
+    active    = len(alerts_df[alerts_df['dismissed'] == 0]) if not alerts_df.empty else 0
+    dismissed = total - active
+    stat_tiles([
+        (f"{active:,}",    "Active Alerts",    "#991b1b"),
+        (f"{dismissed:,}", "Dismissed",         "#64748b"),
+        (f"{total:,}",     "Total Saved",       "#0f172a"),
+    ])
+
+    st.divider()
+
+    # ── Create new alert manually ──────────────────────────────────────────────
+    with st.expander("➕ Create New Alert Manually"):
+        a1, a2, a3, a4 = st.columns(4)
+        new_type   = a1.selectbox("Alert Type",  ["Expiry","Gap","DNA","Sales"], key="new_al_type")
+        new_label  = a2.text_input("Label",       placeholder="e.g. SVOD rights expiring Q2", key="new_al_label")
+        new_plat   = a3.selectbox("Platform",     ["All","PayTV","STB-VOD","SVOD","FAST"], key="new_al_plat")
+        new_days   = a4.number_input("Days threshold", 7, 365, 90, key="new_al_days")
+        new_notes  = st.text_area("Notes (optional)", key="new_al_notes", height=60)
+        if st.button("💾 Save Alert", key="save_new_alert", type="primary"):
+            if new_label.strip():
+                _, err = save_alert(DB_CONN, new_type, new_label.strip(),
+                                    region=reg, platform=new_plat,
+                                    days_threshold=int(new_days),
+                                    persona=st.session_state.persona,
+                                    notes=new_notes.strip() or None)
+                if err: st.error(f"Failed: {err}")
+                else:   st.success("✅ Alert saved!"); st.rerun()
+            else:
+                st.warning("Please enter a label.")
+
+    st.divider()
+
+    # ── Alert list ─────────────────────────────────────────────────────────────
+    show_dismissed = st.checkbox("Show dismissed alerts", key="show_dismissed")
+    alerts_df, _ = get_alerts(DB_CONN, region=reg, include_dismissed=show_dismissed)
+
+    if alerts_df.empty:
+        st.info("No alerts yet. Use the '🔔 Set Alert' buttons on the Rights Explorer Expiry tab, or create one above.")
+        return
+
+    # Group by type
+    for atype in alerts_df['alert_type'].unique():
+        grp = alerts_df[alerts_df['alert_type'] == atype]
+        _icons = {'Expiry':'⏰','Gap':'🔍','DNA':'🚫','Sales':'💸'}
+        _icon  = _icons.get(atype, '🔔')
+        st.markdown(f"### {_icon} {atype} Alerts ({len(grp)})")
+
+        for _, row in grp.iterrows():
+            dismissed_style = "opacity:0.45;" if row['dismissed'] else ""
+            with st.container():
+                ca, cb, cc = st.columns([5, 2, 1])
+                with ca:
+                    st.markdown(
+                        f'<div style="background:#fff;border:1px solid {"#fca5a5" if not row["dismissed"] else "#e2e8f0"};'
+                        f'border-left:4px solid {"#ef4444" if not row["dismissed"] else "#94a3b8"};'
+                        f'border-radius:8px;padding:10px 14px;{dismissed_style}">'
+                        f'<div style="font-weight:700;color:#0f172a;font-size:.9rem">{row["label"]}</div>'
+                        f'<div style="font-size:.75rem;color:#64748b;margin-top:4px">'
+                        f'Region: <b>{row["region"]}</b> · Platform: <b>{row["platform"] or "All"}</b> · '
+                        f'Threshold: <b>{row["days_threshold"]}d</b> · Persona: {row["persona"]}'
+                        f'{"<br>📝 " + str(row["notes"]) if row["notes"] else ""}'
+                        f'</div>'
+                        f'<div style="font-size:.68rem;color:#94a3b8;margin-top:2px">Created: {str(row["created_at"])[:16]}</div>'
+                        f'</div>', unsafe_allow_html=True)
+                with cb:
+                    # Jump to relevant page
+                    if not row['dismissed']:
+                        if row['alert_type'] == 'Expiry':
+                            if st.button("▶ View Expiry", key=f"al_exp_{row['alert_id']}"):
+                                st.session_state.page = 'rights'; st.rerun()
+                        elif row['alert_type'] == 'Gap':
+                            if st.button("▶ View Gap", key=f"al_gap_{row['alert_id']}"):
+                                st.session_state.page = 'gap_analysis'; st.rerun()
+                with cc:
+                    if not row['dismissed']:
+                        if st.button("✕", key=f"al_dis_{row['alert_id']}", help="Dismiss alert"):
+                            dismiss_alert(DB_CONN, int(row['alert_id']))
+                            st.rerun()
+
+    # Bulk clear
+    st.divider()
+    if st.button("🗑 Dismiss All Active Alerts", key="dismiss_all"):
+        for _, row in alerts_df[alerts_df['dismissed']==0].iterrows():
+            dismiss_alert(DB_CONN, int(row['alert_id']))
+        st.rerun()
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# TITLE 360 — Feature 16
+# Unified per-title view: rights + DNA + sales + work orders + elemental
+# ════════════════════════════════════════════════════════════════════════════════
+def page_title_360():
+    reg = st.session_state.current_region
+    st.markdown('<div class="page-header">🎯 Title 360</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-sub">Complete per-title view — rights, DNA, sales, work orders & elemental</div>', unsafe_allow_html=True)
+
+    # Title selector
+    # Quick-select from session (set by drilldown buttons elsewhere)
+    preselect = st.session_state.get('title_360') or ""
+
+    all_titles = run("""
+        SELECT title_name FROM title UNION SELECT movie_title AS title_name FROM movie
+        ORDER BY title_name
+    """)
+    title_list = all_titles['title_name'].tolist() if not all_titles.empty else []
+
+    # Find preselect index
+    try:
+        preselect_idx = title_list.index(preselect) + 1 if preselect in title_list else 0
+    except ValueError:
+        preselect_idx = 0
+
+    chosen = st.selectbox("Select a title", ["— choose a title —"] + title_list,
+                          index=preselect_idx, key="t360_sel")
+
+    if chosen == "— choose a title —":
+        st.info("👆 Select a title above to see its full 360° profile.")
+        return
+
+    # Persist selection
+    st.session_state.title_360 = chosen
+
+    # ── Resolve title_id(s) — handles series titles AND movie titles ──────────
+    t_ids_df = run(f"""
+        SELECT title_id FROM title
+        WHERE LOWER(title_name) LIKE '%{chosen.lower().replace("'","''")}%'
+        LIMIT 20
+    """)
+    t_ids = t_ids_df['title_id'].tolist() if not t_ids_df.empty else []
+    id_list = "','".join(t_ids)
+    if not id_list:
+        st.warning("No title records found for that selection.")
+        return
+
+    # ── Top summary ────────────────────────────────────────────────────────────
+    summary = run(f"""
+        SELECT t.title_name, t.title_type, t.genre, t.content_category,
+               t.controlling_entity, t.age_rating, t.release_year,
+               t.runtime_minutes, t.region,
+               s.series_title, se.season_number, t.episode_number,
+               m.movie_title, m.franchise, m.box_office_gross_usd_m
+        FROM title t
+        LEFT JOIN season se ON t.season_id = se.season_id
+        LEFT JOIN series  s ON t.series_id = s.series_id
+        LEFT JOIN movie   m ON t.movie_id  = m.movie_id
+        WHERE t.title_id IN ('{id_list}')
+        LIMIT 1
+    """)
+    if not summary.empty:
+        r = summary.iloc[0]
+        h1, h2, h3, h4 = st.columns(4)
+        h1.metric("Type",       str(r.get('title_type','—')))
+        h2.metric("Genre",      str(r.get('genre','—')))
+        h3.metric("Rating",     str(r.get('age_rating','—')))
+        h4.metric("Year",       str(r.get('release_year','—')))
+        if r.get('series_title'):
+            st.markdown(f"📺 **Series:** {r['series_title']} · Season {r.get('season_number','?')} · Ep {r.get('episode_number','?')}")
+        if r.get('movie_title') and r.get('franchise'):
+            st.markdown(f"🎬 **Franchise:** {r['franchise']} · Box Office: ${r.get('box_office_gross_usd_m',0):.0f}M")
+
+    st.divider()
+    t1, t2, t3, t4, t5 = st.tabs(["📋 Rights","🚫 DNA","💸 Sales","⚙️ Work Orders","🎞 Elemental"])
+
+    with t1:
+        rights_df = run(f"""
+            SELECT mr.rights_id, cd.deal_source, cd.deal_name,
+                   mr.rights_type, mr.media_platform_primary AS platform,
+                   mr.media_platform_ancillary AS ancillary,
+                   mr.territories, mr.language, mr.brand,
+                   mr.term_from, mr.term_to, mr.exclusivity, mr.holdback,
+                   mr.holdback_days, mr.status,
+                   CAST(JULIANDAY(mr.term_to)-JULIANDAY('now') AS INTEGER) AS days_left,
+                   mr.notes_restrictive
+            FROM media_rights mr
+            JOIN content_deal cd ON mr.deal_id = cd.deal_id
+            WHERE mr.title_id IN ('{id_list}')
+            ORDER BY mr.status, mr.term_to ASC
+        """)
+        if rights_df.empty:
+            st.info("No rights records found for this title.")
+        else:
+            active_r = int((rights_df['status']=='Active').sum())
+            exp30    = int((rights_df['days_left'].fillna(999) <= 30).sum())
+            stat_tiles([
+                (f"{len(rights_df)}",  "Total Rights",   "#0f172a"),
+                (f"{active_r}",        "Active",          "#166534"),
+                (f"{len(rights_df)-active_r}", "Expired/Pending", "#64748b"),
+                (f"{exp30}",           "Expiring 30d",    "#991b1b"),
+            ])
+            rights_df['⏰ Days'] = rights_df['days_left'].apply(exp_tag)
+            rights_df['Excl']   = rights_df['exclusivity'].apply(bool_icon)
+            st.dataframe(
+                rights_df[['deal_source','rights_type','platform','ancillary',
+                           'territories','language','term_from','term_to','⏰ Days','Excl','status']],
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "deal_source": st.column_config.TextColumn("Source"),
+                    "rights_type": st.column_config.TextColumn("Type"),
+                    "platform":    st.column_config.TextColumn("Platform"),
+                    "ancillary":   st.column_config.TextColumn("Ancillary"),
+                    "territories": st.column_config.TextColumn("Territories"),
+                    "language":    st.column_config.TextColumn("Language"),
+                    "term_from":   st.column_config.TextColumn("Start"),
+                    "term_to":     st.column_config.TextColumn("End"),
+                    "⏰ Days":     st.column_config.TextColumn("Days Left"),
+                    "Excl":        st.column_config.TextColumn("Exclusive"),
+                    "status":      st.column_config.TextColumn("Status"),
+                })
+            # Alert button
+            if st.button("🔔 Alert on expiry", key="t360_rights_alert"):
+                _, err = save_alert(DB_CONN,"Expiry",f"Rights alert — {chosen}",
+                                    title_name=chosen, region=reg,
+                                    persona=st.session_state.persona)
+                if not err: st.success("Alert saved!")
+
+    with t2:
+        dna_df = run(f"""
+            SELECT dna_id, reason_category, reason_subcategory,
+                   territory, media_type, term_from, term_to, additional_notes, active
+            FROM do_not_air
+            WHERE title_id IN ('{id_list}')
+            ORDER BY active DESC, reason_category
+        """)
+        if dna_df.empty:
+            st.success("✅ No Do-Not-Air restrictions for this title.")
+        else:
+            active_dna = int(dna_df['active'].sum())
+            stat_tiles([
+                (f"{active_dna}", "Active DNA Flags", "#991b1b"),
+                (f"{len(dna_df)-active_dna}", "Inactive/Historical", "#64748b"),
+            ])
+            st.dataframe(dna_df, use_container_width=True, hide_index=True)
+
+    with t3:
+        sales_df = run(f"""
+            SELECT sales_deal_id, deal_type, buyer, territory, region,
+                   media_platform, term_from, term_to,
+                   deal_value, currency, status
+            FROM sales_deal
+            WHERE title_id IN ('{id_list}')
+            ORDER BY deal_value DESC
+        """)
+        if sales_df.empty:
+            st.info("No outbound sales deals for this title.")
+        else:
+            stat_tiles([
+                (f"{len(sales_df)}",                  "Sales Deals",   "#0f172a"),
+                (fmt_m(sales_df['deal_value'].sum()),  "Total Value",   "#1e40af"),
+                (f"{sales_df['buyer'].nunique()}",     "Unique Buyers", "#5b21b6"),
+            ])
+            st.dataframe(sales_df, use_container_width=True, hide_index=True,
+                column_config={"deal_value": st.column_config.NumberColumn("Value", format="$%,.0f")})
+
+    with t4:
+        wo_df = run(f"""
+            SELECT work_order_id, vendor_name, work_type, status,
+                   priority, due_date, quality_score, cost, billing_status
+            FROM work_orders
+            WHERE title_id IN ('{id_list}')
+            ORDER BY due_date ASC
+        """)
+        if wo_df.empty:
+            st.info("No work orders for this title.")
+        else:
+            stat_tiles([
+                (f"{len(wo_df)}",              "Work Orders",  "#0f172a"),
+                (f"{int((wo_df['status']=='In Progress').sum())}", "In Progress", "#1e40af"),
+                (f"{int((wo_df['status']=='Delayed').sum())}",     "Delayed",     "#991b1b"),
+                (fmt_m(wo_df['cost'].sum()),   "Total Cost",   "#92400e"),
+            ])
+            st.dataframe(wo_df, use_container_width=True, hide_index=True,
+                column_config={
+                    "quality_score": st.column_config.ProgressColumn("Quality",min_value=0,max_value=100,format="%.1f"),
+                    "cost": st.column_config.NumberColumn("Cost", format="$%,.0f"),
+                })
+
+    with t5:
+        el_df = run(f"""
+            SELECT er.elemental_rights_id, ed.deal_source, er.media_platform_primary,
+                   er.territories, er.language, er.term_from, er.term_to, er.status
+            FROM elemental_rights er
+            JOIN elemental_deal ed ON er.elemental_deal_id = ed.elemental_deal_id
+            WHERE er.title_id IN ('{id_list}')
+            ORDER BY er.status, er.term_to
+        """)
+        if el_df.empty:
+            st.info("No elemental rights (promos, trailers, raw assets) for this title.")
+        else:
+            st.dataframe(el_df, use_container_width=True, hide_index=True)
