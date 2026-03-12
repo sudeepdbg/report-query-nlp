@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 st.set_page_config(
     page_title="Foundry Vantage — Rights Explorer",
-    page_icon="🔑",
+    page_icon="💬",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -1126,11 +1126,11 @@ def page_work_orders():
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# CHAT / QUERY — Rights Explorer conversational interface
+# CHAT / QUERY 
 # ════════════════════════════════════════════════════════════════════════════════
 def page_chat():
     reg = st.session_state.current_region
-    st.markdown('<div class="page-header">💬 Chat Query — Rights Explorer</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-header">💬 Chat Query </div>', unsafe_allow_html=True)
     st.markdown(f'<div class="page-sub">Natural language rights interrogation · {reg} · Ask about titles, rights windows, expiry, DNA, territories, exclusivity</div>', unsafe_allow_html=True)
 
 
