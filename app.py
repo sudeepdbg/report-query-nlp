@@ -1752,21 +1752,6 @@ def page_vendors():
                                f"vendors_{reg}.csv", "text/csv")
 
 
-# ── Router ─────────────────────────────────────────────────────────────────────
-{
-    "rights":      page_rights,
-    "titles":      page_titles,
-    "dna":         page_dna,
-    "sales":       page_sales,
-    "deals":       page_deals,
-    "vendors":     page_vendors,
-    "work_orders": page_work_orders,
-    "gap_analysis":page_gap_analysis,
-    "compare":     page_compare,
-    "alerts":      page_alerts,
-    "title_360":   page_title_360,
-    "chat":        page_chat,
-}.get(st.session_state.page, page_rights)()
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -2408,3 +2393,18 @@ def page_title_360():
             st.info("No elemental rights (promos, trailers, raw assets) for this title.")
         else:
             st.dataframe(el_df, use_container_width=True, hide_index=True)
+# ── Router ─────────────────────────────────────────────────────────────────────
+{
+    "rights":      page_rights,
+    "titles":      page_titles,
+    "dna":         page_dna,
+    "sales":       page_sales,
+    "deals":       page_deals,
+    "vendors":     page_vendors,
+    "work_orders": page_work_orders,
+    "gap_analysis":page_gap_analysis,
+    "compare":     page_compare,
+    "alerts":      page_alerts,
+    "title_360":   page_title_360,
+    "chat":        page_chat,
+}.get(st.session_state.page, page_rights)()
