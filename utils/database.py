@@ -263,6 +263,21 @@ CREATE TABLE sales_deal (
     term_from TEXT, term_to TEXT, deal_value REAL,
     currency TEXT DEFAULT 'USD', status TEXT, created_at TEXT
 );
+CREATE TABLE IF NOT EXISTS alerts (
+    alert_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_type  TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    title_name  TEXT,
+    rights_id   TEXT,
+    region      TEXT,
+    platform    TEXT,
+    expiry_date TEXT,
+    days_threshold INTEGER DEFAULT 90,
+    persona     TEXT,
+    notes       TEXT,
+    created_at  TEXT DEFAULT (DATETIME('now')),
+    dismissed   INTEGER DEFAULT 0
+);
 """
 
 INDEXES_SQL = [
@@ -286,6 +301,7 @@ INDEXES_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_title_movie   ON title(movie_id)",
     "CREATE INDEX IF NOT EXISTS idx_movie_cat     ON movie(content_category)",
     "CREATE INDEX IF NOT EXISTS idx_movie_genre   ON movie(genre)",
+    "CREATE INDEX IF NOT EXISTS idx_alerts_region  ON alerts(region)",
 ]
 
 # ─── Seed helpers ─────────────────────────────────────────────────────────────
@@ -704,7 +720,62 @@ def init_database(db_path="foundry.db"):
     return conn
 
 
+# ─── Alert helpers ───────────────────────────────────────────────────────────
+def save_alert(conn, alert_type, label, title_name=None, rights_id=None,
+               region="NA", platform=None, expiry_date=None, days_threshold=90,
+               persona="Business Affairs", notes=None):
+    """Write an alert record. Returns (alert_id, error)."""
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO alerts (alert_type,label,title_name,rights_id,region,
+                                platform,expiry_date,days_threshold,persona,notes)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+        """, (alert_type, label, title_name, rights_id, region,
+              platform, expiry_date, days_threshold, persona, notes))
+        conn.commit()
+        return cur.lastrowid, None
+    except Exception as e:
+        return None, str(e)
+
+def dismiss_alert(conn, alert_id):
+    try:
+        conn.cursor().execute("UPDATE alerts SET dismissed=1 WHERE alert_id=?", (alert_id,))
+        conn.commit()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+def get_alerts(conn, region=None, include_dismissed=False):
+    try:
+        where = "WHERE dismissed=0" if not include_dismissed else "WHERE 1=1"
+        if region:
+            where += f" AND (region='{region}' OR region IS NULL)"
+        df = pd.read_sql_query(f"""
+            SELECT alert_id, alert_type, label, title_name, platform,
+                   expiry_date, days_threshold, region, persona, notes,
+                   created_at, dismissed
+            FROM alerts {where}
+            ORDER BY created_at DESC
+        """, conn)
+        return df, None
+    except Exception as e:
+        return pd.DataFrame(), str(e)
+
+_ALLOWED_STMTS = ("select", "with", "explain")
+
+def _is_readonly(sql: str) -> bool:
+    """Return True only if the statement is a read-only SELECT / CTE / EXPLAIN."""
+    first = sql.strip().lstrip("(").lower().split()[0] if sql.strip() else ""
+    return first in _ALLOWED_STMTS
+
 def execute_sql(sql: str, conn) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
+    """Execute a read-only SQL statement. Rejects any non-SELECT statement."""
+    if not sql or not sql.strip():
+        return None, "Empty query"
+    if not _is_readonly(sql):
+        first_word = sql.strip().split()[0].upper()
+        return None, f"Only SELECT queries are permitted. Got: {first_word}"
     try:
         df = pd.read_sql_query(sql.strip().rstrip(";"), conn)
         return df, None
@@ -715,7 +786,7 @@ def execute_sql(sql: str, conn) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
 def get_table_stats(conn) -> dict:
     stats = {}
     for t in ["series","season","title","movie","content_deal","media_rights",
-              "elemental_rights","do_not_air","sales_deal","deals","work_orders"]:
+              "elemental_rights","do_not_air","sales_deal","deals","work_orders","alerts"]:
         try:
             df = pd.read_sql_query(f"SELECT COUNT(*) AS c FROM {t}", conn)
             stats[t] = int(df.iloc[0]["c"])
