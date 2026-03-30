@@ -527,7 +527,7 @@ def render_dynamic_dashboard(
     fig: Optional[go.Figure] = None
 
     # ── Coerce numeric-looking columns (fixed indentation) ─────────────────
-    for c in df.columns:
+           for c in df.columns:
         if not pd.api.types.is_numeric_dtype(df[c]):
             try:
                 df[c] = pd.to_numeric(df[c], errors='ignore')
