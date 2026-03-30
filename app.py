@@ -1415,6 +1415,771 @@ LIMIT 100""",
                             except (ValueError, TypeError) as _metric_err:
                                 logger.debug(f"Metrics render skipped: {_metric_err}")
 
+                        """
+─────────────────────────────────────────────────────────────────────────────
+FOUNDRY VANTAGE — CUSTOM DASHBOARD BUILDER
+Drop-in replacement / addition for app (10).py
+
+WHAT CHANGED IN app (10).py:
+  1. Session-state block — add 3 new keys (see DIFF A below)
+  2. PAGES list — add the new nav entry (see DIFF B)
+  3. Router dict — add the new route (see DIFF C)
+  4. Paste render_dynamic_dashboard() + page_custom_dashboard() anywhere
+     between the helpers block and the router (after page_chat is a good spot)
+
+All other code is UNCHANGED.
+─────────────────────────────────────────────────────────────────────────────
+"""
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DIFF A ── session-state initialisation block (lines ~154-167 in app (10).py)
+# Add these three keys to the existing dict that is already there:
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+#   'dashboard_pins': [],        # [{query, chart_type, df, fig, ts, title}]
+#   'dashboard_last_df': None,   # most recent NL result (used by Save button)
+#   'dashboard_last_meta': {},   # {query, sql, chart_type, region}
+#
+# Full updated block (replace the existing one):
+
+SESSION_STATE_BLOCK = """
+for k, v in {
+    'page': 'rights',
+    'chat_history': [],
+    'current_region': 'NA',
+    'persona': 'Business Affairs',
+    'user_prefs': {'show_sql': True, 'raw_sql_mode': False},
+    'db_stats': {},
+    'pending_prompt': None,
+    'title_360': None,
+    'compare_region': None,
+    'alerts_count': 0,
+    # ── Custom Dashboard ──────────────────────────────────────────────────────
+    'dashboard_pins': [],        # list of pinned chart cards
+    'dashboard_last_df': None,   # last NL query result dataframe
+    'dashboard_last_meta': {},   # {query, sql, chart_type, region}
+}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+"""
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DIFF B ── PAGES list (lines ~178-191 in app (10).py)
+# Add this one line to the PAGES list (after "chat"):
+#   ("dashboard",    "📐", "Custom Dashboard"),
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DIFF C ── Router dict (last block in app (10).py)
+# Add:   "dashboard": page_custom_dashboard,
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW CSS — append to the existing <style> block in app (10).py
+# (or paste inside the st.markdown("""<style>…</style>""") call)
+# ─────────────────────────────────────────────────────────────────────────────
+DASHBOARD_CSS = """
+/* ── Custom Dashboard ─────────────────────────────────────────────────────── */
+.db-card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;
+  padding:0;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.05);
+  transition:box-shadow .2s}
+.db-card:hover{box-shadow:0 4px 18px rgba(124,58,237,.12)}
+.db-card-header{background:linear-gradient(135deg,#7c3aed 0%,#4f46e5 100%);
+  padding:10px 14px;display:flex;align-items:center;justify-content:space-between}
+.db-card-title{font-size:.82rem;font-weight:700;color:#fff;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:85%}
+.db-card-ts{font-size:.65rem;color:rgba(255,255,255,.65)}
+.db-card-body{padding:10px 12px}
+.db-empty{background:#f8faff;border:2px dashed #c7d2fe;border-radius:14px;
+  padding:36px 24px;text-align:center}
+.db-empty-icon{font-size:2.4rem;margin-bottom:8px}
+.db-empty-title{font-size:1rem;font-weight:700;color:#4f46e5;margin-bottom:6px}
+.db-empty-body{font-size:.82rem;color:#64748b;line-height:1.6}
+.db-suggested{background:#fff;border:1px solid #e2e8f0;border-radius:10px;
+  padding:12px 14px;cursor:pointer;transition:all .15s}
+.db-suggested:hover{border-color:#7c3aed;background:#faf5ff}
+.db-suggested-label{font-size:.78rem;font-weight:600;color:#0f172a}
+.db-suggested-desc{font-size:.7rem;color:#64748b;margin-top:2px}
+.db-metric-card{background:linear-gradient(135deg,#7c3aed 0%,#4f46e5 100%);
+  border-radius:14px;padding:20px 24px;text-align:center;color:#fff}
+.db-metric-value{font-size:2.6rem;font-weight:800;line-height:1;color:#fff}
+.db-metric-label{font-size:.75rem;font-weight:600;color:rgba(255,255,255,.7);
+  text-transform:uppercase;letter-spacing:.08em;margin-top:6px}
+.db-metric-sub{font-size:.7rem;color:rgba(255,255,255,.5);margin-top:3px}
+.db-query-pill{display:inline-flex;align-items:center;gap:6px;
+  background:#ede9fe;border-radius:20px;padding:3px 10px;
+  font-size:.72rem;font-weight:600;color:#5b21b6;margin-right:4px}
+.db-toolbar{background:#fff;border:1px solid #e2e8f0;border-radius:10px;
+  padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin-bottom:14px}
+.suggested-queries-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));
+  gap:10px;margin-top:12px}
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLOTLY THEME — matches app.py PT dict exactly
+# (already defined in app.py as PT — reused below, no re-declaration needed)
+# ─────────────────────────────────────────────────────────────────────────────
+
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import html as _html
+from datetime import datetime
+from typing import Optional
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  render_dynamic_dashboard
+#  Core visualisation engine.  Called by page_custom_dashboard.
+# ══════════════════════════════════════════════════════════════════════════════
+def render_dynamic_dashboard(
+    df: pd.DataFrame,
+    chart_type: str,
+    query_text: str,
+    *,
+    key_prefix: str = "dyn",
+    show_save_button: bool = True,
+) -> Optional[go.Figure]:
+    """
+    Renders the best visualisation for `df` given `chart_type` and `query_text`.
+
+    Priority order
+    ─────────────
+    1. Single-value result  →  st.metric card
+    2. Trend / time query   →  line chart  (columns: term_to / timestamp / date)
+    3. chart_type == 'bar'  →  horizontal bar, top-10
+    4. chart_type == 'pie'  →  donut chart
+    5. Multi-column result  →  st.tabs(Chart View | Data View)
+    6. Fallback             →  vertical bar + data table
+
+    Returns the Plotly figure (or None for metric-only results) so the caller
+    can store it in session state via the "Save to Dashboard" button.
+    """
+    # ── Shared plotly theme (mirrors app.py PT) ────────────────────────────
+    _PT = dict(
+        plot_bgcolor='#ffffff',
+        paper_bgcolor='#ffffff',
+        font=dict(family='Inter,sans-serif', color='#6b7280', size=11),
+        margin=dict(l=20, r=20, t=44, b=20),
+        colorway=['#7c3aed','#f59e0b','#10b981','#ef4444',
+                  '#3b82f6','#a78bfa','#fb923c'],
+    )
+    q_lower   = query_text.lower()
+    is_trend  = any(kw in q_lower for kw in ["trend","time","over time","monthly","weekly","by month","by year"])
+    time_cols = [c for c in df.columns
+                 if any(kw in c.lower() for kw in ["term_to","term_from","timestamp","date","month","year"])]
+    num_cols  = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    str_cols  = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]
+    title_txt = query_text[:70] + ("…" if len(query_text) > 70 else "")
+    fig: Optional[go.Figure] = None
+
+    # ── Coerce numeric-looking columns ────────────────────────────────────
+    for c in df.columns:
+        if not pd.api.types.is_numeric_dtype(df[c]):
+            try:
+                df[c] = pd.to_numeric(df[c], errors='ignore')
+                if pd.api.types.is_numeric_dtype(df[c]):
+                    num_cols = list(dict.fromkeys(num_cols + [c]))
+                    str_cols = [x for x in str_cols if x != c]
+            except Exception:
+                pass
+
+    # ── 1. Single-value / count result → metric card ──────────────────────
+    if len(df) == 1 and len(df.columns) <= 2:
+        val_col = num_cols[0] if num_cols else df.columns[-1]
+        lbl_col = str_cols[0] if str_cols else df.columns[0]
+        val     = df[val_col].iloc[0]
+        lbl     = df[lbl_col].iloc[0] if lbl_col != val_col else val_col.replace("_"," ").title()
+
+        # Format value
+        try:
+            v_float = float(val)
+            if v_float >= 1e9:   fmt_val = f"${v_float/1e9:.1f}B"
+            elif v_float >= 1e6: fmt_val = f"${v_float/1e6:.1f}M"
+            elif v_float >= 1e3: fmt_val = f"{v_float:,.0f}"
+            else:                fmt_val = f"{v_float:,.1f}" if v_float != int(v_float) else f"{int(v_float):,}"
+        except (ValueError, TypeError):
+            fmt_val = str(val)
+
+        st.markdown(f"""
+        <div class="db-metric-card">
+          <div class="db-metric-value">{_html.escape(fmt_val)}</div>
+          <div class="db-metric-label">{_html.escape(str(lbl))}</div>
+          <div class="db-metric-sub">{_html.escape(title_txt)}</div>
+        </div>""", unsafe_allow_html=True)
+
+        if show_save_button:
+            _render_save_button(df, None, query_text, chart_type, key_prefix)
+        return None   # no Plotly figure for a metric card
+
+    # ── 2. Trend / time chart → line chart ───────────────────────────────
+    if (is_trend or time_cols) and num_cols:
+        t_col = time_cols[0] if time_cols else str_cols[0]
+        y_col = num_cols[0]
+
+        # Try to parse dates so they sort correctly
+        try:
+            df = df.copy()
+            df[t_col] = pd.to_datetime(df[t_col], errors='coerce')
+            df = df.dropna(subset=[t_col]).sort_values(t_col)
+        except Exception:
+            pass
+
+        color_col = str_cols[1] if len(str_cols) > 1 else None
+        if color_col:
+            fig = px.line(df, x=t_col, y=y_col, color=color_col, title=title_txt,
+                          markers=True, color_discrete_sequence=_PT['colorway'])
+        else:
+            fig = px.line(df, x=t_col, y=y_col, title=title_txt,
+                          markers=True, color_discrete_sequence=_PT['colorway'])
+            fig.update_traces(line_color='#7c3aed', line_width=2.5,
+                              marker=dict(color='#7c3aed', size=6))
+
+        fig.update_layout(**_PT, height=360)
+        fig.update_xaxes(title_text=t_col.replace("_"," ").title())
+        fig.update_yaxes(title_text=y_col.replace("_"," ").title())
+
+        if len(df.columns) > 2:
+            # Multi-column → tabbed view
+            tab_chart, tab_data = st.tabs(["📈 Chart View", "📋 Data View"])
+            with tab_chart:
+                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_line")
+            with tab_data:
+                st.dataframe(df, use_container_width=True, hide_index=True, height=320)
+                st.download_button("📥 CSV", df.to_csv(index=False),
+                                   f"dashboard_export.csv", "text/csv",
+                                   key=f"{key_prefix}_csv_line")
+        else:
+            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_line_s")
+
+        if show_save_button:
+            _render_save_button(df, fig, query_text, chart_type, key_prefix)
+        return fig
+
+    # ── 3. Bar chart → horizontal bar, top-10 ────────────────────────────
+    if chart_type == 'bar' and str_cols and num_cols:
+        x_col = str_cols[0]
+        y_col = num_cols[0]
+        top   = df.nlargest(10, y_col) if len(df) > 10 else df.sort_values(y_col, ascending=False)
+
+        # Colour gradient — darker = bigger value
+        n = len(top)
+        colours = [f"rgba(124,58,237,{0.4 + 0.6*(i/(max(n-1,1))):.2f})" for i in range(n)]
+
+        fig = go.Figure(go.Bar(
+            y=top[x_col].astype(str),
+            x=top[y_col],
+            orientation='h',
+            marker_color=list(reversed(colours)),
+            text=top[y_col].apply(lambda v: f"{int(v):,}" if float(v)==int(float(v)) else f"{v:,.1f}"),
+            textposition='auto',
+        ))
+        fig.update_layout(**_PT, height=max(280, n * 36 + 80),
+                          title=title_txt,
+                          xaxis_title=y_col.replace("_"," ").title(),
+                          yaxis=dict(autorange='reversed'))
+
+        if len(df.columns) > 2:
+            tab_chart, tab_data = st.tabs(["📊 Chart View", "📋 Data View"])
+            with tab_chart:
+                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_bar")
+                if len(df) > 10:
+                    st.caption(f"Showing top 10 of {len(df):,} results. Full data in Data View.")
+            with tab_data:
+                st.dataframe(df, use_container_width=True, hide_index=True, height=320)
+                st.download_button("📥 CSV", df.to_csv(index=False),
+                                   "dashboard_export.csv", "text/csv",
+                                   key=f"{key_prefix}_csv_bar")
+        else:
+            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_bar_s")
+            if len(df) > 10:
+                st.caption(f"Showing top 10 of {len(df):,} results.")
+
+        if show_save_button:
+            _render_save_button(df, fig, query_text, chart_type, key_prefix)
+        return fig
+
+    # ── 4. Pie chart ──────────────────────────────────────────────────────
+    if chart_type == 'pie' and str_cols and num_cols:
+        names_col  = str_cols[0]
+        values_col = num_cols[0]
+        plot_df    = df.head(10) if len(df) > 10 else df
+
+        fig = px.pie(plot_df, names=names_col, values=values_col,
+                     title=title_txt, hole=0.42,
+                     color_discrete_sequence=_PT['colorway'])
+        fig.update_layout(**_PT, height=340)
+        fig.update_traces(textposition='inside', textinfo='percent+label')
+
+        if len(df.columns) > 2:
+            tab_chart, tab_data = st.tabs(["🥧 Chart View", "📋 Data View"])
+            with tab_chart:
+                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_pie")
+            with tab_data:
+                st.dataframe(df, use_container_width=True, hide_index=True, height=320)
+                st.download_button("📥 CSV", df.to_csv(index=False),
+                                   "dashboard_export.csv", "text/csv",
+                                   key=f"{key_prefix}_csv_pie")
+        else:
+            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_pie_s")
+
+        if show_save_button:
+            _render_save_button(df, fig, query_text, chart_type, key_prefix)
+        return fig
+
+    # ── 5. Multi-column table result — smart chart + tabbed view ─────────
+    if len(df.columns) >= 2:
+        tab_chart, tab_data = st.tabs(["📊 Chart View", "📋 Data View"])
+
+        with tab_chart:
+            if str_cols and num_cols:
+                x_col = str_cols[0]
+                y_col = num_cols[0]
+                top   = df.nlargest(10, y_col) if len(df) > 10 else df.sort_values(y_col, ascending=False)
+                fig = px.bar(top, x=x_col, y=y_col, title=title_txt,
+                             color_discrete_sequence=['#7c3aed'])
+                fig.update_layout(**_PT, height=340)
+                fig.update_xaxes(tickangle=-30)
+                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_multi")
+                if len(df) > 10:
+                    st.caption(f"Chart shows top 10 of {len(df):,} rows.")
+            else:
+                st.info("No numeric column detected — showing data table only.")
+
+        with tab_data:
+            # Quick column-level KPIs for all numeric cols
+            if num_cols:
+                m_cols = st.columns(min(4, len(num_cols)))
+                for i, nc in enumerate(num_cols[:4]):
+                    try:
+                        m_cols[i].metric(nc.replace("_"," ").title(),
+                                         f"{df[nc].sum():,.0f}",
+                                         help=f"Sum of {nc}")
+                    except Exception:
+                        pass
+            st.dataframe(df, use_container_width=True, hide_index=True, height=340)
+            st.download_button("📥 CSV", df.to_csv(index=False),
+                               "dashboard_export.csv", "text/csv",
+                               key=f"{key_prefix}_csv_multi")
+
+        if show_save_button:
+            _render_save_button(df, fig, query_text, chart_type, key_prefix)
+        return fig
+
+    # ── 6. Fallback — bare table ──────────────────────────────────────────
+    st.dataframe(df, use_container_width=True, hide_index=True, height=300)
+    if show_save_button:
+        _render_save_button(df, None, query_text, chart_type, key_prefix)
+    return None
+
+
+def _render_save_button(df, fig, query_text, chart_type, key_prefix):
+    """Inline 'Save to Dashboard' button — persists card in session state."""
+    btn_key = f"save_dash_{key_prefix}"
+    if st.button("📌 Save to Dashboard", key=btn_key,
+                 help="Pin this chart to your Custom Dashboard"):
+        pin = {
+            "query":      query_text,
+            "chart_type": chart_type,
+            "df":         df.copy(),
+            "fig":        fig,
+            "ts":         datetime.now().strftime("%H:%M · %d %b %Y"),
+            "title":      query_text[:55] + ("…" if len(query_text) > 55 else ""),
+            "region":     st.session_state.get("current_region", ""),
+        }
+        st.session_state.dashboard_pins.insert(0, pin)
+        st.success("✅ Pinned to Dashboard — visit 📐 Custom Dashboard in the sidebar.")
+
+
+def _suggested_queries_panel(key_prefix: str = "sug"):
+    """
+    Renders a grid of suggested queries based on the media_rights schema.
+    Shown when an NL query returns no results.
+    """
+    suggestions = [
+        {
+            "label": "Rights expiring in 30 days",
+            "query": "SVOD rights expiring in 30 days",
+            "icon":  "⏰",
+            "desc":  "Active rights · SVOD · 30-day window",
+        },
+        {
+            "label": "Distribution by Territory",
+            "query": "Distribution breakdown by territory",
+            "icon":  "🌍",
+            "desc":  "Active rights grouped by territory",
+        },
+        {
+            "label": "Rights by Platform",
+            "query": "Rights distribution by media platform",
+            "icon":  "📺",
+            "desc":  "PayTV · SVOD · FAST · STB-VOD mix",
+        },
+        {
+            "label": "Movies with DNA flags",
+            "query": "Movies with do-not-air restrictions",
+            "icon":  "🚫",
+            "desc":  "Cross-table: movie + DNA",
+        },
+        {
+            "label": "Exclusive rights count",
+            "query": "How many exclusive rights do we hold",
+            "icon":  "⭐",
+            "desc":  "Total exclusivity count by region",
+        },
+        {
+            "label": "Top buyers by deal value",
+            "query": "Sales deals by buyer sorted by deal value",
+            "icon":  "💸",
+            "desc":  "Outbound sales · buyer ranking",
+        },
+        {
+            "label": "Rights by deal source",
+            "query": "Deal source breakdown TRL C2 FRL",
+            "icon":  "💼",
+            "desc":  "TRL / C2 / FRL rights mix",
+        },
+        {
+            "label": "Expiring rights + active sales",
+            "query": "Rights expiring in 60 days with active sales deals",
+            "icon":  "🔗",
+            "desc":  "Cross-table: expiry + sales overlap",
+        },
+    ]
+
+    st.markdown("""
+    <div style="background:#faf5ff;border:1px solid #ddd6fe;border-radius:12px;
+         padding:16px 18px;margin-top:12px">
+      <div style="font-size:.78rem;font-weight:700;color:#5b21b6;
+           text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">
+        💡 Suggested queries based on the Rights Explorer schema
+      </div>
+    """, unsafe_allow_html=True)
+
+    cols = st.columns(4)
+    for i, s in enumerate(suggestions):
+        with cols[i % 4]:
+            if st.button(
+                f"{s['icon']} {s['label']}",
+                key=f"{key_prefix}_{i}_{hash(s['query'])}",
+                use_container_width=True,
+                help=s["desc"],
+            ):
+                st.session_state["dashboard_nl_input"] = s["query"]
+                st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  page_custom_dashboard
+#  Full Streamlit page.  Add to the router in app (10).py.
+# ══════════════════════════════════════════════════════════════════════════════
+def page_custom_dashboard():
+    """
+    Custom Dashboard Builder — NL → SQL → dynamic chart, with pinning.
+
+    Layout
+    ──────
+    ┌─ header ────────────────────────────────────────────────────────────┐
+    │  page title + sub                                                   │
+    ├─ toolbar ───────────────────────────────────────────────────────────┤
+    │  NL input · Run · Show SQL toggle · Region pill                     │
+    ├─ live result ───────────────────────────────────────────────────────┤
+    │  render_dynamic_dashboard(df, chart_type, query_text)               │
+    │  ↳ includes "Save to Dashboard" button                              │
+    ├─ pinned dashboard ──────────────────────────────────────────────────┤
+    │  2-column card grid of saved charts                                 │
+    └─────────────────────────────────────────────────────────────────────┘
+    """
+    # ── import deps that live in app (10).py scope ─────────────────────────
+    # These are already imported at the top of app.py so they're available:
+    #   execute_sql, parse_query, DB_CONN, run, PT, bar, pie, show_sql prefs
+    # We reference them via their module-level names below.
+    from utils.database import execute_sql
+    from utils.query_parser import parse_query
+    import html as _html
+
+    reg = st.session_state.current_region
+
+    # ── Inject dashboard CSS (idempotent) ──────────────────────────────────
+    st.markdown(f"<style>{DASHBOARD_CSS}</style>", unsafe_allow_html=True)
+
+    # ── Page header ────────────────────────────────────────────────────────
+    pin_count = len(st.session_state.dashboard_pins)
+    st.markdown(
+        '<div class="page-header">📐 Custom Dashboard Builder</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div class="page-sub">'
+        f'Generate visualisations on the fly with natural language · '
+        f'<b>{reg}</b> · '
+        f'<span class="db-query-pill">📌 {pin_count} pinned</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Toolbar ────────────────────────────────────────────────────────────
+    with st.container(border=True):
+        col_inp, col_run = st.columns([5, 1])
+        with col_inp:
+            # Pre-fill from suggestion button if set
+            default_q = st.session_state.pop("dashboard_nl_input", "")
+            query_text = st.text_input(
+                "Natural language query",
+                value=default_q,
+                placeholder='e.g. "Rights expiring in 30 days" or "Distribution by territory"',
+                label_visibility="collapsed",
+                key="db_nl_query",
+            )
+        with col_run:
+            run_clicked = st.button(
+                "▶ Run", type="primary", use_container_width=True, key="db_run"
+            )
+
+        t1, t2, t3 = st.columns(3)
+        show_sql_dash = t1.toggle(
+            "Show SQL",
+            value=st.session_state.user_prefs.get("show_sql", True),
+            key="db_show_sql",
+        )
+        export_enabled = t2.toggle("Auto CSV export", value=True, key="db_export")
+        t3.markdown(
+            f'<div style="font-size:.78rem;color:#64748b;padding-top:6px">'
+            f'📍 Region: <b>{reg}</b> · Persona: <b>{st.session_state.persona}</b>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("---")
+
+    # ── Query execution ────────────────────────────────────────────────────
+    if run_clicked and query_text.strip():
+        with st.spinner("Parsing query and fetching data…"):
+            sql, parse_err, chart_type, region_ctx = parse_query(
+                query_text.strip(), reg
+            )
+
+        if parse_err:
+            st.error(f"❌ Parser error: {parse_err}")
+
+        elif not sql:
+            st.warning("Could not generate SQL for that query.")
+            _suggested_queries_panel("run_fail")
+
+        else:
+            # ── Show SQL ────────────────────────────────────────────────
+            if show_sql_dash:
+                st.markdown(
+                    f'<div class="sql-box">{_html.escape(sql)}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            # ── Execute ─────────────────────────────────────────────────
+            res_df, db_err = execute_sql(sql, DB_CONN)
+
+            if db_err:
+                st.error(f"❌ Database error: {db_err}")
+
+            elif res_df is None or res_df.empty:
+                # ── No results → fallback suggestions ───────────────────
+                st.warning(
+                    f"No records returned for **{region_ctx}**. "
+                    f"Try one of the suggested queries below."
+                )
+                _suggested_queries_panel("no_results")
+
+            else:
+                # ── Persist metadata for the Save button ─────────────
+                st.session_state.dashboard_last_df   = res_df.copy()
+                st.session_state.dashboard_last_meta = {
+                    "query":      query_text.strip(),
+                    "sql":        sql,
+                    "chart_type": chart_type,
+                    "region":     region_ctx,
+                }
+
+                # ── Result header ────────────────────────────────────
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:8px;'
+                    f'margin-bottom:10px">'
+                    f'<span style="font-size:.85rem;font-weight:700;color:#0f172a">'
+                    f'📊 {len(res_df):,} records · {region_ctx}</span>'
+                    f'<span class="db-query-pill">chart: {chart_type}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+                # ── Dynamic visualisation ────────────────────────────
+                fig = render_dynamic_dashboard(
+                    res_df.copy(),
+                    chart_type,
+                    query_text.strip(),
+                    key_prefix="live",
+                    show_save_button=True,
+                )
+
+                # ── Optional CSV download below chart ────────────────
+                if export_enabled:
+                    st.download_button(
+                        "📥 Download full CSV",
+                        res_df.to_csv(index=False),
+                        f"dashboard_{region_ctx}_{chart_type}.csv",
+                        "text/csv",
+                        key="db_dl_full",
+                    )
+
+    elif not query_text.strip():
+        # ── Empty state — show onboarding hints ───────────────────────────
+        st.markdown("""
+        <div class="db-empty">
+          <div class="db-empty-icon">📐</div>
+          <div class="db-empty-title">Build a chart with natural language</div>
+          <div class="db-empty-body">
+            Type a question above and click <b>▶ Run</b> to generate a dynamic visualisation.<br>
+            Results are automatically mapped to the best chart type based on your query and data shape.<br><br>
+            <b>Chart logic:</b>
+            Single-value count → metric card &nbsp;·&nbsp;
+            "trend" / "time" keyword → line chart &nbsp;·&nbsp;
+            category + number → horizontal bar (top 10) &nbsp;·&nbsp;
+            status / type breakdown → donut pie &nbsp;·&nbsp;
+            multi-column → tabbed Chart + Data view
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+        _suggested_queries_panel("empty_state")
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  PINNED DASHBOARD
+    # ══════════════════════════════════════════════════════════════════════
+    if st.session_state.dashboard_pins:
+        st.markdown("---")
+
+        # Dashboard controls
+        dc1, dc2, dc3 = st.columns([4, 2, 2])
+        dc1.markdown(
+            f'<div style="font-size:1.05rem;font-weight:800;color:#0f172a;">'
+            f'📌 Pinned Dashboard <span style="font-size:.8rem;color:#7c3aed;'
+            f'font-weight:600">({pin_count} cards)</span></div>',
+            unsafe_allow_html=True,
+        )
+        layout_2col = dc2.toggle("2-column layout", value=True, key="db_2col")
+        if dc3.button("🗑 Clear all pins", key="db_clear_pins"):
+            st.session_state.dashboard_pins = []
+            st.rerun()
+
+        pins = st.session_state.dashboard_pins
+
+        # Render grid
+        n_cols = 2 if layout_2col else 1
+        for row_start in range(0, len(pins), n_cols):
+            cols = st.columns(n_cols)
+            for col_idx in range(n_cols):
+                pin_idx = row_start + col_idx
+                if pin_idx >= len(pins):
+                    break
+                pin = pins[pin_idx]
+                with cols[col_idx]:
+                    # Card header
+                    st.markdown(
+                        f'<div class="db-card-header">'
+                        f'<span class="db-card-title">{_html.escape(pin["title"])}</span>'
+                        f'<span class="db-card-ts">{pin["ts"]}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                    # Card body — re-render chart or metric
+                    with st.container(border=True):
+                        # Region + chart type pill
+                        st.markdown(
+                            f'<div style="margin-bottom:6px">'
+                            f'<span class="db-query-pill">📍 {pin["region"]}</span>'
+                            f'<span class="db-query-pill">chart: {pin["chart_type"]}</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                        if pin["fig"] is not None:
+                            # Re-use the stored figure; give it a unique key
+                            st.plotly_chart(
+                                pin["fig"],
+                                use_container_width=True,
+                                key=f"pin_fig_{pin_idx}_{hash(pin['ts'])}",
+                            )
+                        else:
+                            # Was a metric card — re-render it compactly
+                            df_pin = pin["df"]
+                            if not df_pin.empty:
+                                num_c = [c for c in df_pin.columns
+                                         if pd.api.types.is_numeric_dtype(df_pin[c])]
+                                val = df_pin[num_c[0]].iloc[0] if num_c else df_pin.iloc[0, -1]
+                                try:
+                                    v = float(val)
+                                    disp = f"{v:,.0f}" if v == int(v) else f"{v:,.2f}"
+                                except (ValueError, TypeError):
+                                    disp = str(val)
+                                st.markdown(
+                                    f'<div class="db-metric-card" style="padding:14px 18px">'
+                                    f'<div class="db-metric-value" style="font-size:2rem">{disp}</div>'
+                                    f'<div class="db-metric-sub">{_html.escape(pin["title"])}</div>'
+                                    f'</div>',
+                                    unsafe_allow_html=True,
+                                )
+
+                        # Per-card actions
+                        pa, pb = st.columns(2)
+                        with pa:
+                            st.download_button(
+                                "📥 CSV",
+                                pin["df"].to_csv(index=False),
+                                f"pin_{pin_idx}.csv",
+                                "text/csv",
+                                key=f"pin_dl_{pin_idx}",
+                                use_container_width=True,
+                            )
+                        with pb:
+                            if st.button(
+                                "✕ Unpin",
+                                key=f"pin_rm_{pin_idx}",
+                                use_container_width=True,
+                            ):
+                                st.session_state.dashboard_pins.pop(pin_idx)
+                                st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  INTEGRATION CHECKLIST
+#  Run through this before deploying the updated app (10).py
+# ══════════════════════════════════════════════════════════════════════════════
+"""
+□  1. Paste DASHBOARD_CSS into the existing st.markdown("""<style>…</style>""") block.
+
+□  2. In the session-state dict (~line 154), add:
+        'dashboard_pins': [],
+        'dashboard_last_df': None,
+        'dashboard_last_meta': {},
+
+□  3. In the PAGES list (~line 178), add after the "chat" entry:
+        ("dashboard", "📐", "Custom Dashboard"),
+
+□  4. Paste render_dynamic_dashboard(), _render_save_button(),
+       _suggested_queries_panel(), and page_custom_dashboard()
+       anywhere after the helper functions (after page_chat() is ideal).
+
+□  5. In the router dict at the bottom of app (10).py (~line 2397), add:
+        "dashboard": page_custom_dashboard,
+
+□  6. Verify imports at top of app.py include:
+        import html          (already present as 'import html')
+        from datetime import datetime   (already present)
+        — no new pip installs needed (streamlit, pandas, plotly.express already used)
+"""
+
+
                         # Chart
                         fig = None
                         if chart_type == 'bar' and len(res_df.columns) >= 2:
