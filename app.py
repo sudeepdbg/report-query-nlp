@@ -1,7 +1,7 @@
 """
 Foundry Vantage — Rights Explorer
 Persona: Business Affairs & Strategy | HBO/Cinemax/HBO Max
-Pages: Rights Explorer · Title Catalog · Do-Not-Air · Sales · Work Orders · Chat
+Pages: Rights Explorer · Title Catalog · Do-Not-Air · Sales · Work Orders · Chat · Custom Dashboard
 """
 import streamlit as st
 import pandas as pd
@@ -13,7 +13,6 @@ import html
 from datetime import datetime, timedelta
 import logging
 from typing import Optional
-
 from utils.database import init_database, execute_sql, get_table_stats, save_alert, dismiss_alert, get_alerts
 from utils.query_parser import parse_query
 
@@ -27,9 +26,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── CSS ────────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# CSS STYLES
+# ═══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
-<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 html,body,*{font-family:'Inter',sans-serif!important;box-sizing:border-box}
 #MainMenu,footer,[data-testid="stStatusWidget"],[data-testid="stDecoration"]{display:none!important}
@@ -104,12 +104,12 @@ hr{border:none!important;border-top:1px solid #e2e8f0!important;margin:.8rem 0!i
 
 /* Badge chips */
 .badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;margin:2px}
-.badge-green {background:#dcfce7;color:#166534}
-.badge-red   {background:#fee2e2;color:#991b1b}
-.badge-amber {background:#fef3c7;color:#92400e}
-.badge-blue  {background:#dbeafe;color:#1e40af}
+.badge-green{background:#dcfce7;color:#166534}
+.badge-red{background:#fee2e2;color:#991b1b}
+.badge-amber{background:#fef3c7;color:#92400e}
+.badge-blue{background:#dbeafe;color:#1e40af}
 .badge-purple{background:#ede9fe;color:#5b21b6}
-.badge-gray  {background:#f1f5f9;color:#475569}
+.badge-gray{background:#f1f5f9;color:#475569}
 
 /* Page header */
 .page-header{font-size:1.75rem;font-weight:800;color:#0f172a;line-height:1.2;margin-bottom:4px}
@@ -117,17 +117,17 @@ hr{border:none!important;border-top:1px solid #e2e8f0!important;margin:.8rem 0!i
 
 /* Rights window pill */
 .window-pill{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;margin:2px}
-.window-SVOD   {background:#ede9fe;color:#5b21b6}
-.window-PayTV  {background:#dbeafe;color:#1e40af}
+.window-SVOD{background:#ede9fe;color:#5b21b6}
+.window-PayTV{background:#dbeafe;color:#1e40af}
 .window-STB-VOD{background:#fef3c7;color:#92400e}
-.window-FAST   {background:#dcfce7;color:#166534}
+.window-FAST{background:#dcfce7;color:#166534}
 .window-CatchUp{background:#ffedd5;color:#9a3412}
-.window-other  {background:#f1f5f9;color:#475569}
+.window-other{background:#f1f5f9;color:#475569}
 
 /* Expiry urgency */
 .exp-critical{background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700}
-.exp-warn    {background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700}
-.exp-ok      {background:#dcfce7;color:#166534;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700}
+.exp-warn{background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700}
+.exp-ok{background:#dcfce7;color:#166534;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700}
 
 /* Stat tile */
 .stat-tile{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;
@@ -135,10 +135,47 @@ hr{border:none!important;border-top:1px solid #e2e8f0!important;margin:.8rem 0!i
 .stat-tile .val{font-size:1.6rem;font-weight:800;color:#0f172a;line-height:1.1}
 .stat-tile .lbl{font-size:.6rem;font-weight:700;color:#94a3b8;text-transform:uppercase;
   letter-spacing:.07em;margin-top:4px}
-</style>
+
+/* Custom Dashboard Styles */
+.db-card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;
+padding:0;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.05);
+transition:box-shadow .2s}
+.db-card:hover{box-shadow:0 4px 18px rgba(124,58,237,.12)}
+.db-card-header{background:linear-gradient(135deg,#7c3aed 0%,#4f46e5 100%);
+padding:10px 14px;display:flex;align-items:center;justify-content:space-between}
+.db-card-title{font-size:.82rem;font-weight:700;color:#fff;
+white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:85%}
+.db-card-ts{font-size:.65rem;color:rgba(255,255,255,.65)}
+.db-card-body{padding:10px 12px}
+.db-empty{background:#f8faff;border:2px dashed #c7d2fe;border-radius:14px;
+padding:36px 24px;text-align:center}
+.db-empty-icon{font-size:2.4rem;margin-bottom:8px}
+.db-empty-title{font-size:1rem;font-weight:700;color:#4f46e5;margin-bottom:6px}
+.db-empty-body{font-size:.82rem;color:#64748b;line-height:1.6}
+.db-suggested{background:#fff;border:1px solid #e2e8f0;border-radius:10px;
+padding:12px 14px;cursor:pointer;transition:all .15s}
+.db-suggested:hover{border-color:#7c3aed;background:#faf5ff}
+.db-suggested-label{font-size:.78rem;font-weight:600;color:#0f172a}
+.db-suggested-desc{font-size:.7rem;color:#64748b;margin-top:2px}
+.db-metric-card{background:linear-gradient(135deg,#7c3aed 0%,#4f46e5 100%);
+border-radius:14px;padding:20px 24px;text-align:center;color:#fff}
+.db-metric-value{font-size:2.6rem;font-weight:800;line-height:1;color:#fff}
+.db-metric-label{font-size:.75rem;font-weight:600;color:rgba(255,255,255,.7);
+text-transform:uppercase;letter-spacing:.08em;margin-top:6px}
+.db-metric-sub{font-size:.7rem;color:rgba(255,255,255,.5);margin-top:3px}
+.db-query-pill{display:inline-flex;align-items:center;gap:6px;
+background:#ede9fe;border-radius:20px;padding:3px 10px;
+font-size:.72rem;font-weight:600;color:#5b21b6;margin-right:4px}
+.db-toolbar{background:#fff;border:1px solid #e2e8f0;border-radius:10px;
+padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+margin-bottom:14px}
+.suggested-queries-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));
+gap:10px;margin-top:12px}
 """, unsafe_allow_html=True)
 
-# ── DB init ───────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# DB INIT
+# ═══════════════════════════════════════════════════════════════════════════════
 @st.cache_resource(ttl=3600, show_spinner="Connecting to Rights database…")
 def init_db():
     for i in range(3):
@@ -147,10 +184,14 @@ def init_db():
             conn.cursor().execute("SELECT 1")
             return conn
         except Exception as e:
-            if i == 2: st.error(str(e)); raise
+            if i == 2:
+                st.error(str(e))
+                raise
             time.sleep(2**i)
 
-# ── Session state ─────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# SESSION STATE
+# ═══════════════════════════════════════════════════════════════════════════════
 for k, v in {
     'page': 'rights',
     'chat_history': [],
@@ -162,6 +203,9 @@ for k, v in {
     'title_360': None,
     'compare_region': None,
     'alerts_count': 0,
+    'dashboard_pins': [],
+    'dashboard_last_df': None,
+    'dashboard_last_meta': {},
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -174,60 +218,84 @@ except Exception as e:
     st.error(f"⚠️ {e}")
     st.stop()
 
-# ── Navigation ─────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# NAVIGATION
+# ═══════════════════════════════════════════════════════════════════════════════
 PAGES = [
-    ("rights",      "🔑", "Rights Explorer"),
-    ("titles",      "🎬", "Title Catalog"),
-    ("dna",         "🚫", "Do-Not-Air"),
-    ("sales",       "💸", "Sales Deals"),
-    ("deals",       "💼", "Deals"),
-    ("vendors",     "🏢", "Vendors"),
-    ("work_orders", "⚙️",  "Work Orders"),
-    ("gap_analysis","🔍", "Gap Analysis"),
-    ("compare",     "⚖️",  "Compare Regions"),
-    ("alerts",      "🔔", "Alerts"),
-    ("title_360",   "🎯", "Title 360"),
-    ("chat",        "💬", "Chat / Query"),
+    ("rights", "🔑", "Rights Explorer"),
+    ("titles", "🎬", "Title Catalog"),
+    ("dna", "🚫", "Do-Not-Air"),
+    ("sales", "💸", "Sales Deals"),
+    ("deals", "💼", "Deals"),
+    ("vendors", "🏢", "Vendors"),
+    ("work_orders", "⚙️", "Work Orders"),
+    ("gap_analysis", "🔍", "Gap Analysis"),
+    ("compare", "⚖️", "Compare Regions"),
+    ("alerts", "🔔", "Alerts"),
+    ("title_360", "🎯", "Title 360"),
+    ("chat", "💬", "Chat / Query"),
+    ("dashboard", "📐", "Custom Dashboard"),
 ]
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
 def run(sql):
     df, err = execute_sql(sql, DB_CONN)
-    if err: st.error(f"SQL error: {err}")
+    if err:
+        st.error(f"SQL error: {err}")
     return df if df is not None else pd.DataFrame()
 
 def fmt_m(x):
     try:
         v = float(x)
-        if v >= 1e9: return f"${v/1e9:.1f}B"
-        if v >= 1e6: return f"${v/1e6:.1f}M"
-        if v >= 1e3: return f"${v/1e3:.0f}K"
+        if v >= 1e9:
+            return f"${v/1e9:.1f}B"
+        if v >= 1e6:
+            return f"${v/1e6:.1f}M"
+        if v >= 1e3:
+            return f"${v/1e3:.0f}K"
         return f"${v:.0f}"
-    except: return str(x)
+    except:
+        return str(x)
 
 def exp_tag(days):
     try:
         d = int(days)
-        if d < 0:  return "🔴 Expired"
-        if d <= 30: return f"🔴 {d}d"
-        if d <= 60: return f"🟡 {d}d"
+        if d < 0:
+            return "🔴 Expired"
+        if d <= 30:
+            return f"🔴 {d}d"
+        if d <= 60:
+            return f"🟡 {d}d"
         return f"🟢 {d}d"
-    except: return "—"
+    except:
+        return "—"
 
 def status_badge(s):
-    m = {'Active':'badge-green','Approved':'badge-green','Completed':'badge-green',
-         'Expired':'badge-red','Delayed':'badge-red','Pending':'badge-amber',
-         'Suspended':'badge-gray','In Progress':'badge-blue'}
+    m = {
+        'Active': 'badge-green',
+        'Approved': 'badge-green',
+        'Completed': 'badge-green',
+        'Expired': 'badge-red',
+        'Delayed': 'badge-red',
+        'Pending': 'badge-amber',
+        'Suspended': 'badge-gray',
+        'In Progress': 'badge-blue'
+    }
     c = m.get(str(s), 'badge-gray')
-    return f'<span class="badge {c}">{s}</span>'
+    return f'{s}'
 
 def bool_icon(v):
     return "✅" if v in (1, "1", True, "Yes", "yes") else "❌"
 
-PT = dict(plot_bgcolor='#ffffff', paper_bgcolor='#ffffff',
-          font=dict(family='Inter,sans-serif', color='#6b7280', size=11),
-          margin=dict(l=20,r=20,t=44,b=20),
-          colorway=['#7c3aed','#f59e0b','#10b981','#ef4444','#3b82f6','#a78bfa','#fb923c'])
+PT = dict(
+    plot_bgcolor='#ffffff',
+    paper_bgcolor='#ffffff',
+    font=dict(family='Inter,sans-serif', color='#6b7280', size=11),
+    margin=dict(l=20, r=20, t=44, b=20),
+    colorway=['#7c3aed', '#f59e0b', '#10b981', '#ef4444', '#3b82f6', '#a78bfa', '#fb923c']
+)
 
 def bar(df, x, y, title="", h=300, horiz=False, color=None):
     if horiz:
@@ -236,7 +304,8 @@ def bar(df, x, y, title="", h=300, horiz=False, color=None):
     else:
         fig = px.bar(df, x=x, y=y, title=title, color=color,
                      color_discrete_sequence=['#7c3aed'])
-    fig.update_layout(**PT, height=h); fig.update_xaxes(tickangle=-30)
+    fig.update_layout(**PT, height=h)
+    fig.update_xaxes(tickangle=-30)
     return fig
 
 def pie(df, names, values, title="", h=300):
@@ -248,25 +317,27 @@ def stat_tiles(items):
     cols = st.columns(len(items))
     for col, (val, lbl, color) in zip(cols, items):
         col.markdown(
-            f'<div class="stat-tile">'
-            f'<div class="val" style="color:{color}">{val}</div>'
-            f'<div class="lbl">{lbl}</div></div>', unsafe_allow_html=True)
+            f'''
+            <div class="stat-tile" style="border-left:4px solid {color}">
+                <div class="val">{val}</div>
+                <div class="lbl">{lbl}</div>
+            </div>
+            ''',
+            unsafe_allow_html=True
+        )
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# SIDEBAR
+# ═══════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown("""
-    <div style="padding:20px 16px 14px;border-bottom:1px solid rgba(255,255,255,.05)">
-      <div style="display:flex;align-items:center;gap:10px">
-        <div style="width:36px;height:36px;background:#7c3aed;border-radius:9px;
-          display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🔑</div>
-        <div>
-          <div style="font-size:1.05rem;font-weight:800;color:#f1f5f9;letter-spacing:-.02em">Foundry Vantage</div>
-          <div style="font-size:.6rem;color:#475569;letter-spacing:.1em;text-transform:uppercase">Rights Explorer · MVP 2026</div>
-        </div>
-      </div>
-    </div>""", unsafe_allow_html=True)
-
-    # Navigation — emoji only in HTML div, plain text in st.button to avoid _arrow_right artifacts
+    <div style="text-align:center;padding:20px 0">
+        <div style="font-size:2rem;margin-bottom:8px">🔑</div>
+        <div style="font-size:1.1rem;font-weight:800;color:#e2e8f0">Foundry Vantage</div>
+        <div style="font-size:.7rem;color:#64748b;margin-top:4px">Rights Explorer · MVP 2026</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
     for pid, icon, label in PAGES:
         active = st.session_state.page == pid
         if active:
@@ -283,15 +354,14 @@ with st.sidebar:
 
     st.markdown('<hr style="border:none;border-top:1px solid rgba(255,255,255,.05);margin:8px 16px">', unsafe_allow_html=True)
 
-    # Context panel
     st.markdown('<div style="padding:0 8px">', unsafe_allow_html=True)
-    regions = ["NA","APAC","EMEA","LATAM"]
+    regions = ["NA", "APAC", "EMEA", "LATAM"]
     def _on_region():
         st.session_state.current_region = st.session_state._reg_sel
     st.selectbox("Region / Market", regions,
                  index=regions.index(st.session_state.current_region),
                  key="_reg_sel", on_change=_on_region)
-    personas = ["Business Affairs","Strategy","Legal","Operations","Analytics"]
+    personas = ["Business Affairs", "Strategy", "Legal", "Operations", "Analytics"]
     def _on_persona():
         st.session_state.persona = st.session_state._per_sel
     st.selectbox("Persona", personas,
@@ -300,17 +370,15 @@ with st.sidebar:
                  key="_per_sel", on_change=_on_persona)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # DB stats
     stats = st.session_state.db_stats
-    # Refresh alerts count
     alerts_live, _ = get_alerts(DB_CONN, region=st.session_state.current_region)
     st.session_state.alerts_count = len(alerts_live) if alerts_live is not None else 0
 
     stat_pairs = [
-        ("title",        "Titles"),
-        ("movie",        "Movies"),
+        ("title", "Titles"),
+        ("movie", "Movies"),
         ("media_rights", "Rights"),
-        ("do_not_air",   "DNA"),
+        ("do_not_air", "DNA"),
     ]
     _sidebar_html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin:10px 8px">'
     for key, lbl in stat_pairs:
@@ -322,22 +390,335 @@ with st.sidebar:
     _sidebar_html += '</div>'
     st.markdown(_sidebar_html, unsafe_allow_html=True)
 
-    # Alerts badge
     ac = st.session_state.alerts_count
     if ac > 0:
         st.markdown(
             f'<div style="margin:0 8px 4px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);'
             f'border-radius:8px;padding:6px 10px;font-size:.75rem;color:#fca5a5;cursor:pointer">'
-            f'🔔 <b>{ac} active alert{"s" if ac!=1 else ""}</b> — click Alerts in nav</div>',
+            f'🔔  <b>{ac} active alert{"s" if ac!=1 else ""}</b> — click Alerts in nav</div>',
             unsafe_allow_html=True)
 
-    # Context note
     st.markdown(
         f'<div style="margin:0 8px 8px;background:rgba(124,58,237,.1);border:1px solid rgba(124,58,237,.2);'
         f'border-radius:8px;padding:8px 10px;font-size:.75rem;color:#c4b5fd">'
-        f'📍 <b>{st.session_state.current_region}</b> · {st.session_state.persona}<br>'
+        f'📍  <b>{st.session_state.current_region}</b> · {st.session_state.persona}<br>'
         f'<span style="color:#64748b;font-size:.68rem">HBO/Cinemax/HBO Max · U.S. default context</span>'
         f'</div>', unsafe_allow_html=True)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CUSTOM DASHBOARD FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+def _render_save_button(df, fig, query_text, chart_type, key_prefix):
+    btn_key = f"save_dash_{key_prefix}"
+    if st.button("📌 Save to Dashboard", key=btn_key,
+                 help="Pin this chart to your Custom Dashboard"):
+        pin = {
+            "query": query_text,
+            "chart_type": chart_type,
+            "df": df.copy(),
+            "fig": fig,
+            "ts": datetime.now().strftime("%H:%M · %d %b %Y"),
+            "title": query_text[:55] + ("…" if len(query_text) > 55 else ""),
+            "region": st.session_state.get("current_region", ""),
+        }
+        st.session_state.dashboard_pins.insert(0, pin)
+        st.success("✅ Pinned to Dashboard — visit 📐 Custom Dashboard in the sidebar.")
+
+def _suggested_queries_panel(key_prefix="sug"):
+    suggestions = [
+        {"label": "Rights expiring in 30 days", "query": "SVOD rights expiring in 30 days", "icon": "⏰", "desc": "Active rights · SVOD · 30-day window"},
+        {"label": "Distribution by Territory", "query": "Distribution breakdown by territory", "icon": "🌍", "desc": "Active rights grouped by territory"},
+        {"label": "Rights by Platform", "query": "Rights distribution by media platform", "icon": "📺", "desc": "PayTV · SVOD · FAST · STB-VOD mix"},
+        {"label": "Movies with DNA flags", "query": "Movies with do-not-air restrictions", "icon": "🚫", "desc": "Cross-table: movie + DNA"},
+        {"label": "Exclusive rights count", "query": "How many exclusive rights do we hold", "icon": "⭐", "desc": "Total exclusivity count by region"},
+        {"label": "Top buyers by deal value", "query": "Sales deals by buyer sorted by deal value", "icon": "💸", "desc": "Outbound sales · buyer ranking"},
+        {"label": "Rights by deal source", "query": "Deal source breakdown TRL C2 FRL", "icon": "💼", "desc": "TRL / C2 / FRL rights mix"},
+        {"label": "Expiring rights + active sales", "query": "Rights expiring in 60 days with active sales deals", "icon": "🔗", "desc": "Cross-table: expiry + sales overlap"},
+    ]
+    st.markdown("""
+    <div style="background:#faf5ff;border:1px solid #ddd6fe;border-radius:12px;
+        padding:16px 18px;margin-top:12px">
+      <div style="font-size:.78rem;font-weight:700;color:#5b21b6;
+          text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">
+       💡 Suggested queries based on the Rights Explorer schema
+      </div>
+    """, unsafe_allow_html=True)
+
+    cols = st.columns(4)
+    for i, s in enumerate(suggestions):
+        with cols[i % 4]:
+            if st.button(f"{s['icon']} {s['label']}", key=f"{key_prefix}_{i}_{hash(s['query'])}",
+                        use_container_width=True, help=s["desc"]):
+                st.session_state["dashboard_nl_input"] = s["query"]
+                st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+def render_dynamic_dashboard(df, chart_type, query_text, *, key_prefix="dyn", show_save_button=True):
+    _PT = dict(plot_bgcolor='#ffffff', paper_bgcolor='#ffffff',
+               font=dict(family='Inter,sans-serif', color='#6b7280', size=11),
+               margin=dict(l=20, r=20, t=44, b=20),
+               colorway=['#7c3aed', '#f59e0b', '#10b981', '#ef4444', '#3b82f6', '#a78bfa', '#fb923c'])
+    q_lower = query_text.lower()
+    is_trend = any(kw in q_lower for kw in ["trend", "time", "over time", "monthly", "weekly", "by month", "by year"])
+    time_cols = [c for c in df.columns if any(kw in c.lower() for kw in ["term_to", "term_from", "timestamp", "date", "month", "year"])]
+    num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    str_cols = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]
+    title_txt = query_text[:70] + ("…" if len(query_text) > 70 else "")
+    fig = None
+
+    for c in df.columns:
+        if not pd.api.types.is_numeric_dtype(df[c]):
+            try:
+                df[c] = pd.to_numeric(df[c], errors='ignore')
+                if pd.api.types.is_numeric_dtype(df[c]):
+                    num_cols = list(dict.fromkeys(num_cols + [c]))
+                    str_cols = [x for x in str_cols if x != c]
+            except Exception:
+                pass
+
+    if len(df) == 1 and len(df.columns) <= 2:
+        val_col = num_cols[0] if num_cols else df.columns[-1]
+        lbl_col = str_cols[0] if str_cols else df.columns[0]
+        val = df[val_col].iloc[0]
+        lbl = df[lbl_col].iloc[0] if lbl_col != val_col else val_col.replace("_", " ").title()
+        try:
+            v_float = float(val)
+            if v_float >= 1e9:
+                fmt_val = f"${v_float/1e9:.1f}B"
+            elif v_float >= 1e6:
+                fmt_val = f"${v_float/1e6:.1f}M"
+            elif v_float >= 1e3:
+                fmt_val = f"{v_float:,.0f}"
+            else:
+                fmt_val = f"{v_float:,.1f}" if v_float != int(v_float) else f"{int(v_float):,}"
+        except (ValueError, TypeError):
+            fmt_val = str(val)
+        st.markdown(f"""
+         <div class="db-metric-card">
+           <div class="db-metric-value">{html.escape(fmt_val)}</div>
+           <div class="db-metric-label">{html.escape(str(lbl))}</div>
+           <div class="db-metric-sub">{html.escape(title_txt)}</div>
+         </div>""", unsafe_allow_html=True)
+        if show_save_button:
+            _render_save_button(df, None, query_text, chart_type, key_prefix)
+        return None
+
+    if (is_trend or time_cols) and num_cols:
+        t_col = time_cols[0] if time_cols else str_cols[0]
+        y_col = num_cols[0]
+        try:
+            df = df.copy()
+            df[t_col] = pd.to_datetime(df[t_col], errors='coerce')
+            df = df.dropna(subset=[t_col]).sort_values(t_col)
+        except Exception:
+            pass
+        color_col = str_cols[1] if len(str_cols) > 1 else None
+        if color_col:
+            fig = px.line(df, x=t_col, y=y_col, color=color_col, title=title_txt, markers=True, color_discrete_sequence=_PT['colorway'])
+        else:
+            fig = px.line(df, x=t_col, y=y_col, title=title_txt, markers=True, color_discrete_sequence=_PT['colorway'])
+            fig.update_traces(line_color='#7c3aed', line_width=2.5, marker=dict(color='#7c3aed', size=6))
+        fig.update_layout(**_PT, height=360)
+        fig.update_xaxes(title_text=t_col.replace("_", " ").title())
+        fig.update_yaxes(title_text=y_col.replace("_", " ").title())
+        if len(df.columns) > 2:
+            tab_chart, tab_data = st.tabs(["📈 Chart View", "📋 Data View"])
+            with tab_chart:
+                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_line")
+            with tab_data:
+                st.dataframe(df, use_container_width=True, hide_index=True, height=320)
+                st.download_button("📥 CSV", df.to_csv(index=False), "dashboard_export.csv", "text/csv", key=f"{key_prefix}_csv_line")
+        else:
+            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_line_s")
+        if show_save_button:
+            _render_save_button(df, fig, query_text, chart_type, key_prefix)
+        return fig
+
+    if chart_type == 'bar' and str_cols and num_cols:
+        x_col = str_cols[0]
+        y_col = num_cols[0]
+        top = df.nlargest(10, y_col) if len(df) > 10 else df.sort_values(y_col, ascending=False)
+        n = len(top)
+        colours = [f"rgba(124,58,237,{0.4 + 0.6*(i/(max(n-1,1))):.2f})" for i in range(n)]
+        fig = go.Figure(go.Bar(y=top[x_col].astype(str), x=top[y_col], orientation='h',
+                    marker_color=list(reversed(colours)),
+                    text=top[y_col].apply(lambda v: f"{int(v):,}" if float(v)==int(float(v)) else f"{v:,.1f}"),
+                    textposition='auto'))
+        fig.update_layout(**_PT, height=max(280, n * 36 + 80), title=title_txt,
+                          xaxis_title=y_col.replace("_", " ").title(), yaxis=dict(autorange='reversed'))
+        if len(df.columns) > 2:
+            tab_chart, tab_data = st.tabs(["📊 Chart View", "📋 Data View"])
+            with tab_chart:
+                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_bar")
+                if len(df) > 10:
+                    st.caption(f"Showing top 10 of {len(df):,} results. Full data in Data View.")
+            with tab_data:
+                st.dataframe(df, use_container_width=True, hide_index=True, height=320)
+                st.download_button("📥 CSV", df.to_csv(index=False), "dashboard_export.csv", "text/csv", key=f"{key_prefix}_csv_bar")
+        else:
+            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_bar_s")
+            if len(df) > 10:
+                st.caption(f"Showing top 10 of {len(df):,} results.")
+        if show_save_button:
+            _render_save_button(df, fig, query_text, chart_type, key_prefix)
+        return fig
+
+    if chart_type == 'pie' and str_cols and num_cols:
+        names_col = str_cols[0]
+        values_col = num_cols[0]
+        plot_df = df.head(10) if len(df) > 10 else df
+        fig = px.pie(plot_df, names=names_col, values=values_col, title=title_txt, hole=0.42, color_discrete_sequence=_PT['colorway'])
+        fig.update_layout(**_PT, height=340)
+        fig.update_traces(textposition='inside', textinfo='percent+label')
+        if len(df.columns) > 2:
+            tab_chart, tab_data = st.tabs(["🥧 Chart View", "📋 Data View"])
+            with tab_chart:
+                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_pie")
+            with tab_data:
+                st.dataframe(df, use_container_width=True, hide_index=True, height=320)
+                st.download_button("📥 CSV", df.to_csv(index=False), "dashboard_export.csv", "text/csv", key=f"{key_prefix}_csv_pie")
+        else:
+            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_pie_s")
+        if show_save_button:
+            _render_save_button(df, fig, query_text, chart_type, key_prefix)
+        return fig
+
+    if len(df.columns) >= 2:
+        tab_chart, tab_data = st.tabs(["📊 Chart View", "📋 Data View"])
+        with tab_chart:
+            if str_cols and num_cols:
+                x_col = str_cols[0]
+                y_col = num_cols[0]
+                top = df.nlargest(10, y_col) if len(df) > 10 else df.sort_values(y_col, ascending=False)
+                fig = px.bar(top, x=x_col, y=y_col, title=title_txt, color_discrete_sequence=['#7c3aed'])
+                fig.update_layout(**_PT, height=340)
+                fig.update_xaxes(tickangle=-30)
+                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_multi")
+                if len(df) > 10:
+                    st.caption(f"Chart shows top 10 of {len(df):,} rows.")
+            else:
+                st.info("No numeric column detected — showing data table only.")
+        with tab_data:
+            if num_cols:
+                m_cols = st.columns(min(4, len(num_cols)))
+                for i, nc in enumerate(num_cols[:4]):
+                    try:
+                        m_cols[i].metric(nc.replace("_", " ").title(), f"{df[nc].sum():,.0f}", help=f"Sum of {nc}")
+                    except Exception:
+                        pass
+            st.dataframe(df, use_container_width=True, hide_index=True, height=340)
+            st.download_button("📥 CSV", df.to_csv(index=False), "dashboard_export.csv", "text/csv", key=f"{key_prefix}_csv_multi")
+        if show_save_button:
+            _render_save_button(df, fig, query_text, chart_type, key_prefix)
+        return fig
+
+    st.dataframe(df, use_container_width=True, hide_index=True, height=300)
+    if show_save_button:
+        _render_save_button(df, None, query_text, chart_type, key_prefix)
+    return None
+
+def page_custom_dashboard():
+    reg = st.session_state.current_region
+    pin_count = len(st.session_state.dashboard_pins)
+    st.markdown('<div class="page-header">📐 Custom Dashboard Builder</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="page-sub">Generate visualisations on the fly with natural language · <b>{reg}</b> · <span class="db-query-pill">📌 {pin_count} pinned</span></div>', unsafe_allow_html=True)
+
+    with st.container(border=True):
+        col_inp, col_run = st.columns([5, 1])
+        with col_inp:
+            default_q = st.session_state.pop("dashboard_nl_input", "")
+            query_text = st.text_input("Natural language query", value=default_q,
+                placeholder='e.g. "Rights expiring in 30 days" or "Distribution by territory"',
+                label_visibility="collapsed", key="db_nl_query")
+        with col_run:
+            run_clicked = st.button("▶ Run", type="primary", use_container_width=True, key="db_run")
+        t1, t2, t3 = st.columns(3)
+        show_sql_dash = t1.toggle("Show SQL", value=st.session_state.user_prefs.get("show_sql", True), key="db_show_sql")
+        export_enabled = t2.toggle("Auto CSV export", value=True, key="db_export")
+        t3.markdown(f'<div style="font-size:.78rem;color:#64748b;padding-top:6px">📍 Region: <b>{reg}</b> · Persona: <b>{st.session_state.persona}</b></div>', unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    if run_clicked and query_text.strip():
+        with st.spinner("Parsing query and fetching data…"):
+            sql, parse_err, chart_type, region_ctx = parse_query(query_text.strip(), reg)
+        if parse_err:
+            st.error(f"❌ Parser error: {parse_err}")
+        elif not sql:
+            st.warning("Could not generate SQL for that query.")
+            _suggested_queries_panel("run_fail")
+        else:
+            if show_sql_dash:
+                st.markdown(f'<div class="sql-box">{html.escape(sql)}</div>', unsafe_allow_html=True)
+            res_df, db_err = execute_sql(sql, DB_CONN)
+            if db_err:
+                st.error(f"❌ Database error: {db_err}")
+            elif res_df is None or res_df.empty:
+                st.warning(f"No records returned for **{region_ctx}**. Try one of the suggested queries below.")
+                _suggested_queries_panel("no_results")
+            else:
+                st.session_state.dashboard_last_df = res_df.copy()
+                st.session_state.dashboard_last_meta = {"query": query_text.strip(), "sql": sql, "chart_type": chart_type, "region": region_ctx}
+                st.markdown(f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="font-size:.85rem;font-weight:700;color:#0f172a">📊 {len(res_df):,} records · {region_ctx}</span><span class="db-query-pill">chart: {chart_type}</span></div>', unsafe_allow_html=True)
+                fig = render_dynamic_dashboard(res_df.copy(), chart_type, query_text.strip(), key_prefix="live", show_save_button=True)
+                if export_enabled:
+                    st.download_button("📥 Download full CSV", res_df.to_csv(index=False), f"dashboard_{region_ctx}_{chart_type}.csv", "text/csv", key="db_dl_full")
+    elif not query_text.strip():
+        st.markdown("""
+         <div class="db-empty">
+           <div class="db-empty-icon">📐</div>
+           <div class="db-empty-title">Build a chart with natural language</div>
+           <div class="db-empty-body">
+            Type a question above and click <b>▶ Run</b> to generate a dynamic visualisation.<br>
+            Results are automatically mapped to the best chart type based on your query and data shape.<br><br>
+             <b>Chart logic:</b> Single-value count → metric card &nbsp;· &nbsp; "trend" / "time" keyword → line chart &nbsp;· &nbsp;
+            category + number → horizontal bar (top 10) &nbsp;· &nbsp; status / type breakdown → donut pie &nbsp;· &nbsp; multi-column → tabbed Chart + Data view
+           </div>
+         </div>
+         """, unsafe_allow_html=True)
+        _suggested_queries_panel("empty_state")
+
+    if st.session_state.dashboard_pins:
+        st.markdown("---")
+        dc1, dc2, dc3 = st.columns([4, 2, 2])
+        dc1.markdown(f'<div style="font-size:1.05rem;font-weight:800;color:#0f172a;">📌 Pinned Dashboard <span style="font-size:.8rem;color:#7c3aed;font-weight:600">({pin_count} cards)</span></div>', unsafe_allow_html=True)
+        layout_2col = dc2.toggle("2-column layout", value=True, key="db_2col")
+        if dc3.button("🗑 Clear all pins", key="db_clear_pins"):
+            st.session_state.dashboard_pins = []
+            st.rerun()
+        pins = st.session_state.dashboard_pins
+        n_cols = 2 if layout_2col else 1
+        for row_start in range(0, len(pins), n_cols):
+            cols = st.columns(n_cols)
+            for col_idx in range(n_cols):
+                pin_idx = row_start + col_idx
+                if pin_idx >= len(pins):
+                    break
+                pin = pins[pin_idx]
+                with cols[col_idx]:
+                    st.markdown(f'<div class="db-card-header"><span class="db-card-title">{html.escape(pin["title"])}</span><span class="db-card-ts">{pin["ts"]}</span></div>', unsafe_allow_html=True)
+                    with st.container(border=True):
+                        st.markdown(f'<div style="margin-bottom:6px"><span class="db-query-pill">📍 {pin["region"]}</span><span class="db-query-pill">chart: {pin["chart_type"]}</span></div>', unsafe_allow_html=True)
+                        if pin["fig"] is not None:
+                            st.plotly_chart(pin["fig"], use_container_width=True, key=f"pin_fig_{pin_idx}_{hash(pin["ts"])}")
+                        else:
+                            df_pin = pin["df"]
+                            if not df_pin.empty:
+                                num_c = [c for c in df_pin.columns if pd.api.types.is_numeric_dtype(df_pin[c])]
+                                val = df_pin[num_c[0]].iloc[0] if num_c else df_pin.iloc[0, -1]
+                                try:
+                                    v = float(val)
+                                    disp = f"{v:,.0f}" if v == int(v) else f"{v:,.2f}"
+                                except (ValueError, TypeError):
+                                    disp = str(val)
+                                st.markdown(f'<div class="db-metric-card" style="padding:14px 18px"><div class="db-metric-value" style="font-size:2rem">{disp}</div><div class="db-metric-sub">{html.escape(pin["title"])}</div></div>', unsafe_allow_html=True)
+                        pa, pb = st.columns(2)
+                        with pa:
+                            st.download_button("📥 CSV", pin["df"].to_csv(index=False), f"pin_{pin_idx}.csv", "text/csv", key=f"pin_dl_{pin_idx}", use_container_width=True)
+                        with pb:
+                            if st.button("✕ Unpin", key=f"pin_rm_{pin_idx}", use_container_width=True):
+                                st.session_state.dashboard_pins.pop(pin_idx)
+                                st.rerun()
 
 
 # ════════════════════════════════════════════════════════════════════════════════
