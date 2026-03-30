@@ -526,10 +526,10 @@ def render_dynamic_dashboard(
     title_txt = query_text[:70] + ("…" if len(query_text) > 70 else "")
     fig: Optional[go.Figure] = None
 
-    # ── Coerce numeric-looking columns ────────────────────────────────────
+    # ── Coerce numeric-looking columns (fixed indentation) ─────────────────
     for c in df.columns:
         if not pd.api.types.is_numeric_dtype(df[c]):
-             try:
+            try:
                 df[c] = pd.to_numeric(df[c], errors='ignore')
                 if pd.api.types.is_numeric_dtype(df[c]):
                     num_cols = list(dict.fromkeys(num_cols + [c]))
@@ -624,7 +624,7 @@ def render_dynamic_dashboard(
             x=top[y_col],
             orientation='h',
             marker_color=list(reversed(colours)),
-             text=top[y_col].apply(lambda v: f"{int(v):,}" if float(v)==int(float(v)) else f"{v:,.1f}"),
+            text=top[y_col].apply(lambda v: f"{int(v):,}" if float(v)==int(float(v)) else f"{v:,.1f}"),
             textposition='auto',
         ))
         fig.update_layout(**_PT, height=max(280, n * 36 + 80),
