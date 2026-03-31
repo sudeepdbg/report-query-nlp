@@ -1,7 +1,7 @@
 """
 Foundry Vantage — Rights Explorer
 Persona: Business Affairs & Strategy | HBO/Cinemax/HBO Max
-Pages: Rights Explorer · Title Catalog · Do-Not-Air · Sales · Work Orders · Chat
+Pages: Rights Explorer · Title Catalog · Do-Not-Air · Sales · Work Orders · Chat · Custom Dashboard
 """
 import streamlit as st
 import pandas as pd
@@ -135,6 +135,30 @@ hr{border:none!important;border-top:1px solid #e2e8f0!important;margin:.8rem 0!i
 .stat-tile .val{font-size:1.6rem;font-weight:800;color:#0f172a;line-height:1.1}
 .stat-tile .lbl{font-size:.6rem;font-weight:700;color:#94a3b8;text-transform:uppercase;
   letter-spacing:.07em;margin-top:4px}
+
+/* ── Custom Dashboard ──────────────────────────────────────────────────────── */
+.db-card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;
+  padding:0;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.05);transition:box-shadow .2s}
+.db-card:hover{box-shadow:0 4px 18px rgba(124,58,237,.12)}
+.db-card-header{background:linear-gradient(135deg,#7c3aed 0%,#4f46e5 100%);
+  padding:10px 14px;display:flex;align-items:center;justify-content:space-between}
+.db-card-title{font-size:.82rem;font-weight:700;color:#fff;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:85%}
+.db-card-ts{font-size:.65rem;color:rgba(255,255,255,.65)}
+.db-empty{background:#f8faff;border:2px dashed #c7d2fe;border-radius:14px;
+  padding:36px 24px;text-align:center}
+.db-empty-icon{font-size:2.4rem;margin-bottom:8px}
+.db-empty-title{font-size:1rem;font-weight:700;color:#4f46e5;margin-bottom:6px}
+.db-empty-body{font-size:.82rem;color:#64748b;line-height:1.6}
+.db-metric-card{background:linear-gradient(135deg,#7c3aed 0%,#4f46e5 100%);
+  border-radius:14px;padding:20px 24px;text-align:center;color:#fff}
+.db-metric-value{font-size:2.6rem;font-weight:800;line-height:1;color:#fff}
+.db-metric-label{font-size:.75rem;font-weight:600;color:rgba(255,255,255,.7);
+  text-transform:uppercase;letter-spacing:.08em;margin-top:6px}
+.db-metric-sub{font-size:.7rem;color:rgba(255,255,255,.5);margin-top:3px}
+.db-query-pill{display:inline-flex;align-items:center;gap:6px;background:#ede9fe;
+  border-radius:20px;padding:3px 10px;font-size:.72rem;font-weight:600;
+  color:#5b21b6;margin-right:4px}
 </style>
 """, unsafe_allow_html=True)
 
@@ -162,6 +186,10 @@ for k, v in {
     'title_360': None,
     'compare_region': None,
     'alerts_count': 0,
+    # ── Custom Dashboard ──────────────────────────────────────────────────────
+    'dashboard_pins': [],        # list of pinned chart cards
+    'dashboard_last_df': None,   # last NL result dataframe
+    'dashboard_last_meta': {},   # {query, sql, chart_type, region}
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -188,6 +216,7 @@ PAGES = [
     ("alerts",      "🔔", "Alerts"),
     ("title_360",   "🎯", "Title 360"),
     ("chat",        "💬", "Chat / Query"),
+    ("dashboard",   "📐", "Custom Dashboard"),
 ]
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -266,7 +295,6 @@ with st.sidebar:
       </div>
     </div>""", unsafe_allow_html=True)
 
-    # Navigation — emoji only in HTML div, plain text in st.button to avoid _arrow_right artifacts
     for pid, icon, label in PAGES:
         active = st.session_state.page == pid
         if active:
@@ -283,7 +311,6 @@ with st.sidebar:
 
     st.markdown('<hr style="border:none;border-top:1px solid rgba(255,255,255,.05);margin:8px 16px">', unsafe_allow_html=True)
 
-    # Context panel
     st.markdown('<div style="padding:0 8px">', unsafe_allow_html=True)
     regions = ["NA","APAC","EMEA","LATAM"]
     def _on_region():
@@ -300,9 +327,7 @@ with st.sidebar:
                  key="_per_sel", on_change=_on_persona)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # DB stats
     stats = st.session_state.db_stats
-    # Refresh alerts count
     alerts_live, _ = get_alerts(DB_CONN, region=st.session_state.current_region)
     st.session_state.alerts_count = len(alerts_live) if alerts_live is not None else 0
 
@@ -315,14 +340,13 @@ with st.sidebar:
     _sidebar_html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin:10px 8px">'
     for key, lbl in stat_pairs:
         _sidebar_html += (f'<div style="background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.07);'
-                 f'border-radius:8px;padding:8px;text-align:center">'
-                 f'<div style="font-size:1.1rem;font-weight:800;color:#e2e8f0">{stats.get(key,0):,}</div>'
-                 f'<div style="font-size:.58rem;color:#475569;text-transform:uppercase;letter-spacing:.06em">{lbl}</div>'
-                 f'</div>')
+                         f'border-radius:8px;padding:8px;text-align:center">'
+                         f'<div style="font-size:1.1rem;font-weight:800;color:#e2e8f0">{stats.get(key,0):,}</div>'
+                         f'<div style="font-size:.58rem;color:#475569;text-transform:uppercase;letter-spacing:.06em">{lbl}</div>'
+                         f'</div>')
     _sidebar_html += '</div>'
     st.markdown(_sidebar_html, unsafe_allow_html=True)
 
-    # Alerts badge
     ac = st.session_state.alerts_count
     if ac > 0:
         st.markdown(
@@ -331,7 +355,15 @@ with st.sidebar:
             f'🔔 <b>{ac} active alert{"s" if ac!=1 else ""}</b> — click Alerts in nav</div>',
             unsafe_allow_html=True)
 
-    # Context note
+    # Dashboard pin count badge
+    pin_ct = len(st.session_state.dashboard_pins)
+    if pin_ct > 0:
+        st.markdown(
+            f'<div style="margin:0 8px 4px;background:rgba(124,58,237,.12);border:1px solid rgba(124,58,237,.3);'
+            f'border-radius:8px;padding:6px 10px;font-size:.75rem;color:#c4b5fd">'
+            f'📐 <b>{pin_ct} pinned chart{"s" if pin_ct!=1 else ""}</b> — Custom Dashboard</div>',
+            unsafe_allow_html=True)
+
     st.markdown(
         f'<div style="margin:0 8px 8px;background:rgba(124,58,237,.1);border:1px solid rgba(124,58,237,.2);'
         f'border-radius:8px;padding:8px 10px;font-size:.75rem;color:#c4b5fd">'
@@ -348,7 +380,6 @@ def page_rights():
     st.markdown(f'<div class="page-header">🔑 Rights Explorer</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="page-sub">Content rights licensed-in for <b>{reg}</b> — media rights, windows, territories, exclusivity &amp; expiry</div>', unsafe_allow_html=True)
 
-    # ── Top KPIs ─────────────────────────────────────────────────────────────
     kpi = run(f"""
         SELECT
             COUNT(*) AS total,
@@ -384,7 +415,6 @@ def page_rights():
         "⭐ Exclusivity", "📄 Rights Table"
     ])
 
-    # ── Expiry Alerts ─────────────────────────────────────────────────────────
     with tab1:
         st.markdown("#### Rights Expiring — Upcoming Windows")
         c1, c2, c3 = st.columns([2,1,1])
@@ -438,7 +468,6 @@ def page_rights():
                 st.markdown(f"**Total: {len(exp_df)}**")
                 st.markdown("**Exclusive:** " + str(int(exp_df['exclusivity'].sum())))
 
-            # Formatted table — clean readable column labels
             show = exp_df.copy()
             show['Days Left']    = show['days_remaining'].apply(exp_tag)
             show['Exclusive']    = show['exclusivity'].apply(bool_icon)
@@ -483,7 +512,6 @@ def page_rights():
                         st.success("🔔 Alert saved! View on the Alerts page.")
                         st.session_state.alerts_count += 1
 
-    # ── Windows & Platforms ───────────────────────────────────────────────────
     with tab2:
         c1, c2 = st.columns(2)
         with c1:
@@ -510,7 +538,6 @@ def page_rights():
             if not df.empty:
                 st.plotly_chart(pie(df,'platform','count','Rights Mix by Platform'), use_container_width=True)
 
-        # Ancillary platforms breakdown
         st.markdown("#### Ancillary Platform Coverage")
         df = run(f"""
             SELECT media_platform_ancillary, COUNT(*) AS count,
@@ -520,7 +547,6 @@ def page_rights():
             GROUP BY media_platform_ancillary ORDER BY count DESC
         """)
         if not df.empty:
-            # Split comma-separated ancillary fields
             rows_exp = []
             for _, row in df.iterrows():
                 for p in str(row['media_platform_ancillary']).split(','):
@@ -533,7 +559,6 @@ def page_rights():
                 st.plotly_chart(bar(df_exp,'ancillary_platform','count',
                                     "Ancillary Platform Rights Count", h=280), use_container_width=True)
 
-        # Deal source breakdown
         st.markdown("#### Rights by Deal Source (TRL / C2 / FRL)")
         df = run(f"""
             SELECT cd.deal_source, COUNT(DISTINCT mr.title_id) AS titles,
@@ -551,10 +576,8 @@ def page_rights():
             with c1: st.plotly_chart(bar(df,'deal_source','titles','Titles by Deal Source',h=280), use_container_width=True)
             with c2: st.dataframe(df, use_container_width=True, hide_index=True)
 
-    # ── Territories ────────────────────────────────────────────────────────────
     with tab3:
         st.markdown("#### Rights Coverage by Territory")
-        # Explode comma-separated territories
         raw = run(f"""
             SELECT territories, COUNT(*) AS rights_count,
                    COUNT(DISTINCT title_id) AS titles,
@@ -586,7 +609,6 @@ def page_rights():
                 with c2: st.plotly_chart(bar(terr_df.head(15),'territory','titles','Titles Covered by Territory',h=320,horiz=True), use_container_width=True)
                 st.dataframe(terr_df, use_container_width=True, hide_index=True)
 
-    # ── Holdbacks ──────────────────────────────────────────────────────────────
     with tab4:
         st.markdown("#### Holdback Analysis")
         st.caption("Holdback = a waiting period before a rights window opens, typically after theatrical or pay TV.")
@@ -605,7 +627,6 @@ def page_rights():
             with c1: st.plotly_chart(bar(df,'platform','avg_holdback_days','Avg Holdback Days by Platform',h=300), use_container_width=True)
             with c2: st.dataframe(df, use_container_width=True, hide_index=True)
 
-        # Holdback vs non-holdback title count
         df2 = run(f"""
             SELECT media_platform_primary AS platform,
                    SUM(CASE WHEN holdback=1 THEN 1 ELSE 0 END) AS has_holdback,
@@ -620,7 +641,6 @@ def page_rights():
             fig.update_layout(**PT, height=300, barmode='group', title="Holdback vs No-Holdback by Platform")
             st.plotly_chart(fig, use_container_width=True)
 
-    # ── Exclusivity ────────────────────────────────────────────────────────────
     with tab5:
         df = run(f"""
             SELECT media_platform_primary AS platform,
@@ -643,7 +663,6 @@ def page_rights():
                 st.dataframe(df[['platform','total','exclusive','non_exclusive','excl_pct']],
                              use_container_width=True, hide_index=True)
 
-        # Exclusive by rights type
         df3 = run(f"""
             SELECT rights_type,
                    SUM(exclusivity) AS exclusive,
@@ -654,7 +673,6 @@ def page_rights():
         if not df3.empty:
             st.plotly_chart(pie(df3,'rights_type','exclusive','Exclusivity Mix by Rights Type',h=280), use_container_width=True)
 
-    # ── Rights Table ───────────────────────────────────────────────────────────
     with tab6:
         st.markdown("#### Browse All Rights")
         f1, f2, f3, f4 = st.columns(4)
@@ -783,8 +801,6 @@ def page_titles():
                 if not sea_df.empty:
                     st.dataframe(sea_df, use_container_width=True, hide_index=True)
 
-
-    # ── Movies Tab ──────────────────────────────────────────────────────────────
     with tab2:
         st.markdown("#### WBD Film Slate — 25 Titles")
         c1, c2, c3 = st.columns(3)
@@ -828,7 +844,6 @@ def page_titles():
                 st.plotly_chart(pie(cat_grp,'content_category','box_office_gross_usd_m',
                     'Value by Category', h=400), use_container_width=True)
 
-            # Franchise analysis
             fr_df = mv_df[mv_df['franchise'].notna()]
             if not fr_df.empty:
                 fr_grp = fr_df.groupby('franchise').agg(
@@ -874,7 +889,6 @@ def page_titles():
             """)
             if not df.empty: st.plotly_chart(pie(df,'age_rating','count','Age Ratings'), use_container_width=True)
 
-        # Rights coverage per title
         st.markdown("#### Title → Rights Coverage")
         df = run(f"""
             SELECT t.title_name, t.genre, t.controlling_entity,
@@ -899,7 +913,6 @@ def page_titles():
 
     with tab4:
         search_q = st.text_input("Search title name", placeholder="e.g. House of the Dragon, Succession…", key="title_search")
-        # Use parameterised LIKE via Python-side sanitisation (no f-string user input in SQL)
         if search_q:
             safe_q = search_q.replace("'", "''").replace(";", "").replace("--", "")[:200]
             df = run(f"""
@@ -917,7 +930,6 @@ def page_titles():
             """)
             if not df.empty:
                 st.caption(f"{len(df)} results")
-                # Title 360 drilldown button
                 st.markdown("**💡 Click a title below, then press** **View Title 360 ▶** to see full detail.")
                 selected_title = st.selectbox("Select title to view", ["—"] + df['title_name'].tolist(), key="search_360_sel")
                 if selected_title != "—":
@@ -1005,7 +1017,7 @@ def page_dna():
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# SALES DEALS (rights-out)
+# SALES DEALS
 # ════════════════════════════════════════════════════════════════════════════════
 def page_sales():
     reg = st.session_state.current_region
@@ -1126,15 +1138,13 @@ def page_work_orders():
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# CHAT / QUERY 
+# CHAT / QUERY
 # ════════════════════════════════════════════════════════════════════════════════
 def page_chat():
     reg = st.session_state.current_region
     st.markdown('<div class="page-header">💬 Chat Query </div>', unsafe_allow_html=True)
     st.markdown(f'<div class="page-sub">Natural language rights interrogation · {reg} · Ask about titles, rights windows, expiry, DNA, territories, exclusivity</div>', unsafe_allow_html=True)
 
-
-    # Suggested queries — using st.container instead of expander to avoid _arrow artifact
     if not st.session_state.chat_history:
         st.markdown("""
         <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;
@@ -1190,7 +1200,6 @@ def page_chat():
         raw_sql_mode = st.toggle("⚡ Raw SQL", value=st.session_state.user_prefs.get('raw_sql_mode', False), key="raw_sql_tog")
         st.session_state.user_prefs['raw_sql_mode'] = raw_sql_mode
 
-    # ── Raw SQL editor ──────────────────────────────────────────────────────────
     if raw_sql_mode:
         st.markdown("""
         <div style="background:#f8faff;border:1px solid #c7d2fe;border-radius:10px;
@@ -1206,7 +1215,6 @@ def page_chat():
           </div>
         </div>""", unsafe_allow_html=True)
 
-        # Quick-start templates
         raw_templates = {
             "— Pick a template —": "",
             "Title health check (rights + DNA + sales)": """SELECT
@@ -1298,7 +1306,8 @@ LIMIT 100""",
         }
 
         sel_template = st.selectbox("Quick-start template", list(raw_templates.keys()), key="raw_tpl")
-        default_sql  = raw_templates[sel_template] if sel_template != "— Pick a template —" else                        st.session_state.get("last_raw_sql", "SELECT * FROM movie LIMIT 10")
+        default_sql  = raw_templates[sel_template] if sel_template != "— Pick a template —" else \
+                       st.session_state.get("last_raw_sql", "SELECT * FROM movie LIMIT 10")
 
         raw_sql_input = st.text_area("SQL Editor", value=default_sql, height=220, key="raw_sql_input",
                                      help="Full SQLite syntax. All 14 tables available.")
@@ -1315,13 +1324,11 @@ LIMIT 100""",
                 if show_sql:
                     st.markdown(f'<div class="sql-box">{html.escape(raw_sql_input.strip())}</div>',
                                 unsafe_allow_html=True)
-                # Quick metrics
                 num_cols = [c for c in res_df.columns if pd.api.types.is_numeric_dtype(res_df[c])]
                 if num_cols:
                     mc = st.columns(min(4, len(num_cols)))
                     for i, nc in enumerate(num_cols[:4]):
                         mc[i].metric(nc, f"{res_df[nc].sum():,.0f}")
-                # Chart auto-detect
                 if len(res_df.columns) >= 2:
                     first_num = next((c for c in res_df.columns if pd.api.types.is_numeric_dtype(res_df[c])), None)
                     if first_num and res_df.columns[0] != first_num and len(res_df) <= 50:
@@ -1330,7 +1337,6 @@ LIMIT 100""",
                 st.dataframe(res_df, use_container_width=True, hide_index=True, height=380)
                 st.download_button("📥 Download CSV", res_df.to_csv(index=False),
                                    "raw_sql_result.csv", "text/csv", key="dl_raw")
-                # Save to history
                 st.session_state.chat_history.append({
                     "question": f"[SQL] {raw_sql_input.strip()[:80]}…",
                     "answer":   f"📊 **{len(res_df):,} records** — raw SQL query",
@@ -1363,7 +1369,6 @@ LIMIT 100""",
                 st.download_button("📥 CSV", msg["data"].to_csv(index=False),
                                    f"query_{i}.csv", "text/csv", key=f"dl_h_{i}")
 
-    # Input
     user_input    = st.chat_input(f"Ask about rights, titles, expiry, DNA… [{reg}]")
     active_prompt = None
     if 'pending_prompt' in st.session_state and st.session_state.pending_prompt:
@@ -1378,13 +1383,11 @@ LIMIT 100""",
 
         with st.chat_message("assistant", avatar="🔑"):
             with st.spinner("Analysing…"):
-                # Always use sidebar region as base; query text may refine it
                 sql, error, chart_type, region_ctx = parse_query(active_prompt, reg)
 
                 if error:
                     st.error(f"❌ {error}")
                 else:
-                    # Show SQL inline immediately — no expander, no rerun needed
                     if show_sql:
                         st.markdown(f'<div class="sql-box">{html.escape(sql)}</div>', unsafe_allow_html=True)
 
@@ -1393,7 +1396,6 @@ LIMIT 100""",
                     if db_err:
                         st.error(f"DB error: {db_err}")
                     elif res_df is not None and not res_df.empty:
-                        # Metrics strip
                         metrics_data = []
                         val_cols = [c for c in res_df.columns
                                     if any(x in c.lower() for x in ['count','total','value','fee','days'])]
@@ -1415,7 +1417,6 @@ LIMIT 100""",
                             except (ValueError, TypeError) as _metric_err:
                                 logger.debug(f"Metrics render skipped: {_metric_err}")
 
-                        # Chart
                         fig = None
                         if chart_type == 'bar' and len(res_df.columns) >= 2:
                             x_col = res_df.columns[0]
@@ -1438,7 +1439,6 @@ LIMIT 100""",
                                            f"rights_query_{region_ctx}.csv", "text/csv",
                                            key="dl_live")
 
-                        # Save to history — no rerun, stays visible
                         st.session_state.chat_history.append({
                             "question": active_prompt,
                             "answer":   answer_txt,
@@ -1458,7 +1458,7 @@ LIMIT 100""",
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# DEALS PAGE (original deals table)
+# DEALS PAGE
 # ════════════════════════════════════════════════════════════════════════════════
 def page_deals():
     reg = st.session_state.current_region
@@ -1510,7 +1510,6 @@ def page_deals():
                 st.plotly_chart(bar(df, 'rights_scope', 'total_value',
                                     'Deal Value by Rights Scope', h=300, horiz=True), use_container_width=True)
 
-        # Monthly deal trend
         df = run(f"""
             SELECT STRFTIME('%Y-%m', deal_date) AS month,
                    COUNT(*) AS count, SUM(deal_value) AS value
@@ -1573,11 +1572,11 @@ def page_deals():
 
     with tab4:
         f1, f2, f3 = st.columns(3)
-        st_f  = f1.selectbox("Status",       ["All","Active","Expired","Pending","Under Negotiation","Terminated"], key="dl_st")
-        dt_f  = f2.selectbox("Deal Type",    ["All","Output Deal","Library Buy","First-Look Deal",
-                                               "Co-Production","Licensing Agreement","Distribution Deal",
-                                               "Volume Deal","Format Deal"], key="dl_dt")
-        pay_f = f3.selectbox("Payment",      ["All","Paid","Pending","Invoiced","Overdue","Partially Paid"], key="dl_pay")
+        st_f  = f1.selectbox("Status",    ["All","Active","Expired","Pending","Under Negotiation","Terminated"], key="dl_st")
+        dt_f  = f2.selectbox("Deal Type", ["All","Output Deal","Library Buy","First-Look Deal",
+                                           "Co-Production","Licensing Agreement","Distribution Deal",
+                                           "Volume Deal","Format Deal"], key="dl_dt")
+        pay_f = f3.selectbox("Payment",   ["All","Paid","Pending","Invoiced","Overdue","Partially Paid"], key="dl_pay")
 
         extras = ""
         if st_f  != "All": extras += f" AND status='{st_f}'"
@@ -1592,8 +1591,6 @@ def page_deals():
             ORDER BY deal_value DESC LIMIT 300
         """)
         if not df.empty:
-            # Colour-code expiry
-            today_str = datetime.now().strftime("%Y-%m-%d")
             def _safe_exp(d):
                 try:
                     return exp_tag((datetime.strptime(str(d), "%Y-%m-%d") - datetime.now()).days)
@@ -1606,15 +1603,12 @@ def page_deals():
                     'deal_value','deal_date','expiry_date','⏰ Expiry',
                     'rights_scope','territory','status','payment_status']],
                 use_container_width=True, hide_index=True,
-                column_config={
-                    "deal_value": st.column_config.NumberColumn("Value", format="$%,.0f"),
-                })
-            st.download_button("📥 Export CSV", df.to_csv(index=False),
-                               f"deals_{reg}.csv", "text/csv")
+                column_config={"deal_value": st.column_config.NumberColumn("Value", format="$%,.0f")})
+            st.download_button("📥 Export CSV", df.to_csv(index=False), f"deals_{reg}.csv", "text/csv")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# VENDORS PAGE (original vendors table — restored columns)
+# VENDORS PAGE
 # ════════════════════════════════════════════════════════════════════════════════
 def page_vendors():
     reg = st.session_state.current_region
@@ -1643,7 +1637,6 @@ def page_vendors():
     tab1, tab2, tab3, tab4 = st.tabs(["📊 Performance", "💰 Spend", "⭐ Quality", "📄 Vendor List"])
 
     with tab1:
-        # Deals + spend dual axis
         df = run(f"""
             SELECT v.vendor_name, v.vendor_type, v.rating,
                    COUNT(d.deal_id) AS deal_count,
@@ -1688,7 +1681,6 @@ def page_vendors():
                 st.plotly_chart(bar(df, 'vendor_name', 'total_spend',
                                     'Total Spend by Vendor', h=300, horiz=True), use_container_width=True)
 
-        # Payment terms breakdown
         df = run(f"""
             SELECT payment_terms, COUNT(*) AS vendors, SUM(total_spend) AS spend
             FROM vendors WHERE UPPER(region)='{reg}'
@@ -1712,7 +1704,6 @@ def page_vendors():
             GROUP BY v.vendor_id ORDER BY avg_quality DESC NULLS LAST
         """)
         if not df.empty:
-            # Scatter: work volume vs quality
             fig = px.scatter(df, x='work_orders', y='avg_quality',
                              size='wo_cost', color='vendor_type',
                              hover_name='vendor_name',
@@ -1720,8 +1711,6 @@ def page_vendors():
                              labels={'work_orders':'Work Orders','avg_quality':'Avg Quality Score'})
             fig.update_layout(**PT, height=340)
             st.plotly_chart(fig, use_container_width=True)
-
-            # Rating vs rework bar
             c1, c2 = st.columns(2)
             with c1: st.plotly_chart(bar(df, 'vendor_name', 'rating',       'Vendor Rating', h=280), use_container_width=True)
             with c2: st.plotly_chart(bar(df, 'vendor_name', 'total_rework', 'Total Rework Count', h=280), use_container_width=True)
@@ -1741,22 +1730,16 @@ def page_vendors():
             GROUP BY v.vendor_id ORDER BY v.rating DESC
         """)
         if not df.empty:
-            st.dataframe(
-                df,
-                use_container_width=True, hide_index=True,
+            st.dataframe(df, use_container_width=True, hide_index=True,
                 column_config={
                     "rating":      st.column_config.ProgressColumn("Rating", min_value=0, max_value=5, format="%.1f ⭐"),
                     "total_spend": st.column_config.NumberColumn("Total Spend", format="$%,.0f"),
                 })
-            st.download_button("📥 Export CSV", df.to_csv(index=False),
-                               f"vendors_{reg}.csv", "text/csv")
-
-
+            st.download_button("📥 Export CSV", df.to_csv(index=False), f"vendors_{reg}.csv", "text/csv")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# RIGHTS GAP ANALYSIS — Feature 17
-# "Which titles have NO active rights in region X for platform Y?"
+# RIGHTS GAP ANALYSIS
 # ════════════════════════════════════════════════════════════════════════════════
 def page_gap_analysis():
     reg = st.session_state.current_region
@@ -1766,7 +1749,6 @@ def page_gap_analysis():
         f'identify coverage gaps for licensing decisions · {reg}</div>',
         unsafe_allow_html=True)
 
-    # ── Filters ──────────────────────────────────────────────────────────────
     c1, c2, c3 = st.columns(3)
     gap_plat  = c1.selectbox("Platform", ["All","PayTV","STB-VOD","SVOD","FAST"], key="gap_plat")
     gap_type  = c2.selectbox("Title Type", ["All","Episode","Movie","Special"],   key="gap_type")
@@ -1814,7 +1796,6 @@ def page_gap_analysis():
                 (f"{int((no_rights_df['total_rights']==0).sum()):,}",
                  "Never Had Rights", "#64748b"),
             ])
-            # Bar: top series with most gap titles
             series_gap = (no_rights_df.dropna(subset=['series_title'])
                           .groupby('series_title').size().reset_index(name='gap_titles')
                           .sort_values('gap_titles', ascending=False).head(15))
@@ -1843,8 +1824,6 @@ def page_gap_analysis():
                 })
             st.download_button("📥 Export Gap Report", no_rights_df.to_csv(index=False),
                                f"gap_{reg}_{gap_plat}.csv", "text/csv")
-
-            # Set Alert on gap
             if st.button("🔔 Alert me when rights are added for these titles", key="gap_alert_btn"):
                 _, err = save_alert(DB_CONN, "Gap", f"Rights gap — {len(no_rights_df)} titles, {gap_plat} [{reg}]",
                                     region=reg, platform=gap_plat, persona=st.session_state.persona)
@@ -1931,8 +1910,7 @@ def page_gap_analysis():
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# COMPARE REGIONS — Feature 18
-# Side-by-side key metrics across two regions
+# COMPARE REGIONS
 # ════════════════════════════════════════════════════════════════════════════════
 def page_compare():
     st.markdown('<div class="page-header">⚖️ Compare Regions</div>', unsafe_allow_html=True)
@@ -1970,7 +1948,6 @@ def page_compare():
             st.warning("No data"); return
         ra, rb = ka.iloc[0], kb.iloc[0]
 
-        # KPI comparison grid
         metrics = [
             ("Total Rights",    "total"),
             ("Active",          "active"),
@@ -1982,11 +1959,8 @@ def page_compare():
         cols = st.columns(len(metrics))
         for col, (lbl, key) in zip(cols, metrics):
             va, vb = int(ra.get(key,0)), int(rb.get(key,0))
-            delta = va - vb
-            col.metric(f"{lbl}", f"{reg_a}: {va:,}", delta=f"vs {reg_b}: {vb:,}",
-                       delta_color="off")
+            col.metric(f"{lbl}", f"{reg_a}: {va:,}", delta=f"vs {reg_b}: {vb:,}", delta_color="off")
 
-        # Grouped bar: platform distribution
         for reg, clr in [(reg_a,'#7c3aed'),(reg_b,'#f59e0b')]:
             df = run(f"""
                 SELECT media_platform_primary AS platform, COUNT(*) AS rights
@@ -2005,7 +1979,6 @@ def page_compare():
             fig.update_layout(**PT, height=320)
             st.plotly_chart(fig, use_container_width=True)
 
-        # Exclusivity compare
         for reg in [reg_a, reg_b]:
             df = run(f"""
                 SELECT media_platform_primary AS platform,
@@ -2040,7 +2013,6 @@ def page_compare():
                 st.metric("Total DNA Records", f"{db['n'].sum():,}")
                 st.plotly_chart(pie(db,'cat','n',f'DNA — {reg_b}',h=280), use_container_width=True)
 
-        # Overlap: titles with DNA in BOTH regions
         overlap = run(f"""
             SELECT DISTINCT a.title_name
             FROM do_not_air a
@@ -2079,7 +2051,6 @@ def page_compare():
             fig.update_layout(**PT, height=320)
             st.plotly_chart(fig, use_container_width=True)
 
-        # Title type breakdown
         tta = run(f"SELECT title_type, COUNT(*) AS n FROM title WHERE UPPER(region)='{reg_a}' GROUP BY title_type")
         ttb = run(f"SELECT title_type, COUNT(*) AS n FROM title WHERE UPPER(region)='{reg_b}' GROUP BY title_type")
         c1, c2 = st.columns(2)
@@ -2090,7 +2061,7 @@ def page_compare():
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# ALERTS PAGE — Feature 15
+# ALERTS PAGE
 # ════════════════════════════════════════════════════════════════════════════════
 def page_alerts():
     reg = st.session_state.current_region
@@ -2102,7 +2073,6 @@ def page_alerts():
         st.error(f"Error loading alerts: {err}")
         return
 
-    # KPIs
     total     = len(alerts_df)
     active    = len(alerts_df[alerts_df['dismissed'] == 0]) if not alerts_df.empty else 0
     dismissed = total - active
@@ -2114,7 +2084,6 @@ def page_alerts():
 
     st.divider()
 
-    # ── Create new alert manually ──────────────────────────────────────────────
     with st.expander("➕ Create New Alert Manually"):
         a1, a2, a3, a4 = st.columns(4)
         new_type   = a1.selectbox("Alert Type",  ["Expiry","Gap","DNA","Sales"], key="new_al_type")
@@ -2136,7 +2105,6 @@ def page_alerts():
 
     st.divider()
 
-    # ── Alert list ─────────────────────────────────────────────────────────────
     show_dismissed = st.checkbox("Show dismissed alerts", key="show_dismissed")
     alerts_df, _ = get_alerts(DB_CONN, region=reg, include_dismissed=show_dismissed)
 
@@ -2144,7 +2112,6 @@ def page_alerts():
         st.info("No alerts yet. Use the '🔔 Set Alert' buttons on the Rights Explorer Expiry tab, or create one above.")
         return
 
-    # Group by type
     for atype in alerts_df['alert_type'].unique():
         grp = alerts_df[alerts_df['alert_type'] == atype]
         _icons = {'Expiry':'⏰','Gap':'🔍','DNA':'🚫','Sales':'💸'}
@@ -2169,7 +2136,6 @@ def page_alerts():
                         f'<div style="font-size:.68rem;color:#94a3b8;margin-top:2px">Created: {str(row["created_at"])[:16]}</div>'
                         f'</div>', unsafe_allow_html=True)
                 with cb:
-                    # Jump to relevant page
                     if not row['dismissed']:
                         if row['alert_type'] == 'Expiry':
                             if st.button("▶ View Expiry", key=f"al_exp_{row['alert_id']}"):
@@ -2183,7 +2149,6 @@ def page_alerts():
                             dismiss_alert(DB_CONN, int(row['alert_id']))
                             st.rerun()
 
-    # Bulk clear
     st.divider()
     if st.button("🗑 Dismiss All Active Alerts", key="dismiss_all"):
         for _, row in alerts_df[alerts_df['dismissed']==0].iterrows():
@@ -2192,25 +2157,20 @@ def page_alerts():
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# TITLE 360 — Feature 16
-# Unified per-title view: rights + DNA + sales + work orders + elemental
+# TITLE 360
 # ════════════════════════════════════════════════════════════════════════════════
 def page_title_360():
     reg = st.session_state.current_region
     st.markdown('<div class="page-header">🎯 Title 360</div>', unsafe_allow_html=True)
     st.markdown('<div class="page-sub">Complete per-title view — rights, DNA, sales, work orders & elemental</div>', unsafe_allow_html=True)
 
-    # Title selector
-    # Quick-select from session (set by drilldown buttons elsewhere)
     preselect = st.session_state.get('title_360') or ""
-
     all_titles = run("""
         SELECT title_name FROM title UNION SELECT movie_title AS title_name FROM movie
         ORDER BY title_name
     """)
     title_list = all_titles['title_name'].tolist() if not all_titles.empty else []
 
-    # Find preselect index
     try:
         preselect_idx = title_list.index(preselect) + 1 if preselect in title_list else 0
     except ValueError:
@@ -2223,10 +2183,8 @@ def page_title_360():
         st.info("👆 Select a title above to see its full 360° profile.")
         return
 
-    # Persist selection
     st.session_state.title_360 = chosen
 
-    # ── Resolve title_id(s) — handles series titles AND movie titles ──────────
     t_ids_df = run(f"""
         SELECT title_id FROM title
         WHERE LOWER(title_name) LIKE '%{chosen.lower().replace("'","''")}%'
@@ -2238,7 +2196,6 @@ def page_title_360():
         st.warning("No title records found for that selection.")
         return
 
-    # ── Top summary ────────────────────────────────────────────────────────────
     summary = run(f"""
         SELECT t.title_name, t.title_type, t.genre, t.content_category,
                t.controlling_entity, t.age_rating, t.release_year,
@@ -2312,7 +2269,6 @@ def page_title_360():
                     "Excl":        st.column_config.TextColumn("Exclusive"),
                     "status":      st.column_config.TextColumn("Status"),
                 })
-            # Alert button
             if st.button("🔔 Alert on expiry", key="t360_rights_alert"):
                 _, err = save_alert(DB_CONN,"Expiry",f"Rights alert — {chosen}",
                                     title_name=chosen, region=reg,
@@ -2393,6 +2349,437 @@ def page_title_360():
             st.info("No elemental rights (promos, trailers, raw assets) for this title.")
         else:
             st.dataframe(el_df, use_container_width=True, hide_index=True)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# CUSTOM DASHBOARD BUILDER  ◄── NEW PAGE
+# ════════════════════════════════════════════════════════════════════════════════
+
+def _db_save_pin(df: pd.DataFrame, fig, query_text: str, chart_type: str, key_prefix: str):
+    """Persist a chart card to session state dashboard_pins."""
+    if st.button("📌 Save to Dashboard", key=f"save_dash_{key_prefix}",
+                 help="Pin this chart to your Custom Dashboard"):
+        st.session_state.dashboard_pins.insert(0, {
+            "query":      query_text,
+            "chart_type": chart_type,
+            "df":         df.copy(),
+            "fig":        fig,
+            "ts":         datetime.now().strftime("%H:%M · %d %b %Y"),
+            "title":      query_text[:55] + ("…" if len(query_text) > 55 else ""),
+            "region":     st.session_state.get("current_region", ""),
+        })
+        st.success("✅ Pinned! Visit 📐 Custom Dashboard in the sidebar.")
+
+
+def _db_suggested_queries(key_prefix: str = "sug"):
+    """Schema-aware suggested queries panel shown on empty/no-result state."""
+    suggestions = [
+        ("⏰", "Rights expiring in 30 days",        "SVOD rights expiring in 30 days"),
+        ("🌍", "Distribution by Territory",          "Distribution breakdown by territory"),
+        ("📺", "Rights by Platform",                 "Rights distribution by media platform"),
+        ("🚫", "Movies with DNA flags",              "Movies with do-not-air restrictions"),
+        ("⭐", "Exclusive rights count",             "How many exclusive rights do we hold"),
+        ("💸", "Top buyers by deal value",           "Sales deals by buyer sorted by deal value"),
+        ("💼", "Rights by deal source",              "Deal source breakdown TRL C2 FRL"),
+        ("🔗", "Expiring rights + active sales",     "Rights expiring in 60 days with active sales deals"),
+    ]
+    st.markdown("""
+    <div style="background:#faf5ff;border:1px solid #ddd6fe;border-radius:12px;
+         padding:16px 18px;margin-top:12px">
+      <div style="font-size:.78rem;font-weight:700;color:#5b21b6;
+           text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">
+        💡 Suggested queries based on the Rights Explorer schema
+      </div>
+    """, unsafe_allow_html=True)
+    cols = st.columns(4)
+    for i, (icon, label, query) in enumerate(suggestions):
+        with cols[i % 4]:
+            if st.button(f"{icon} {label}", key=f"{key_prefix}_{i}_{hash(query)}",
+                         use_container_width=True):
+                st.session_state["_db_prefill"] = query
+                st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_dynamic_dashboard(
+    df: pd.DataFrame,
+    chart_type: str,
+    query_text: str,
+    *,
+    key_prefix: str = "dyn",
+    show_save_button: bool = True,
+) -> Optional[go.Figure]:
+    """
+    Render the best visualisation for df given chart_type and query_text.
+
+    Priority
+    ────────
+    1. Single row / single value  →  gradient metric card
+    2. "trend" / "time" in query  →  line chart on date column
+    3. chart_type == 'bar'        →  horizontal bar, top-10, gradient fill
+    4. chart_type == 'pie'        →  donut chart
+    5. Multi-column               →  st.tabs  Chart View | Data View
+    6. Fallback                   →  data table only
+
+    Returns the Plotly figure (None for metric-only results).
+    """
+    q_lower   = query_text.lower()
+    is_trend  = any(kw in q_lower for kw in
+                    ["trend","over time","monthly","weekly","by month","by year","time"])
+    time_cols = [c for c in df.columns
+                 if any(kw in c.lower() for kw in
+                        ["term_to","term_from","timestamp","date","month","year"])]
+    num_cols  = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    str_cols  = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]
+    title_txt = query_text[:70] + ("…" if len(query_text) > 70 else "")
+    fig: Optional[go.Figure] = None
+
+    # Coerce numeric-looking string columns
+    for c in list(str_cols):
+        try:
+            converted = pd.to_numeric(df[c], errors='raise')
+            df = df.copy(); df[c] = converted
+            num_cols.append(c); str_cols.remove(c)
+        except Exception:
+            pass
+
+    # ── 1. Single-value / count result → metric card ──────────────────────
+    if len(df) == 1 and len(df.columns) <= 2:
+        val_col = num_cols[0] if num_cols else df.columns[-1]
+        lbl_col = str_cols[0] if str_cols else df.columns[0]
+        val     = df[val_col].iloc[0]
+        lbl     = str(df[lbl_col].iloc[0]) if lbl_col != val_col else val_col.replace("_"," ").title()
+        try:
+            v = float(val)
+            fmt = (f"${v/1e9:.1f}B" if v >= 1e9 else
+                   f"${v/1e6:.1f}M" if v >= 1e6 else
+                   f"{v:,.0f}"      if v == int(v) else f"{v:,.2f}")
+        except (ValueError, TypeError):
+            fmt = str(val)
+
+        st.markdown(
+            f'<div class="db-metric-card">'
+            f'<div class="db-metric-value">{html.escape(fmt)}</div>'
+            f'<div class="db-metric-label">{html.escape(lbl)}</div>'
+            f'<div class="db-metric-sub">{html.escape(title_txt)}</div>'
+            f'</div>', unsafe_allow_html=True)
+
+        if show_save_button:
+            _db_save_pin(df, None, query_text, chart_type, key_prefix)
+        return None
+
+    # ── 2. Trend / time → line chart ──────────────────────────────────────
+    if (is_trend or time_cols) and num_cols:
+        t_col  = time_cols[0] if time_cols else (str_cols[0] if str_cols else df.columns[0])
+        y_col  = num_cols[0]
+        try:
+            df = df.copy()
+            df[t_col] = pd.to_datetime(df[t_col], errors='coerce')
+            df = df.dropna(subset=[t_col]).sort_values(t_col)
+        except Exception:
+            pass
+        color_col = str_cols[1] if len(str_cols) > 1 else None
+        if color_col:
+            fig = px.line(df, x=t_col, y=y_col, color=color_col, title=title_txt,
+                          markers=True, color_discrete_sequence=PT['colorway'])
+        else:
+            fig = px.line(df, x=t_col, y=y_col, title=title_txt,
+                          markers=True, color_discrete_sequence=PT['colorway'])
+            fig.update_traces(line_color='#7c3aed', line_width=2.5,
+                              marker=dict(color='#7c3aed', size=6))
+        fig.update_layout(**PT, height=360)
+
+        if len(df.columns) > 2:
+            tc, td = st.tabs(["📈 Chart View", "📋 Data View"])
+            with tc: st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_line")
+            with td:
+                st.dataframe(df, use_container_width=True, hide_index=True, height=320)
+                st.download_button("📥 CSV", df.to_csv(index=False),
+                                   "export.csv", "text/csv", key=f"{key_prefix}_dl_line")
+        else:
+            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_line_s")
+
+        if show_save_button:
+            _db_save_pin(df, fig, query_text, chart_type, key_prefix)
+        return fig
+
+    # ── 3. Bar chart → horizontal bar, top-10, gradient ──────────────────
+    if chart_type == 'bar' and str_cols and num_cols:
+        x_col = str_cols[0]
+        y_col = num_cols[0]
+        top   = df.nlargest(10, y_col) if len(df) > 10 else df.sort_values(y_col, ascending=False)
+        n     = len(top)
+        colours = [f"rgba(124,58,237,{0.35 + 0.65*(i/max(n-1,1)):.2f})" for i in range(n)]
+
+        fig = go.Figure(go.Bar(
+            y=top[x_col].astype(str),
+            x=top[y_col],
+            orientation='h',
+            marker_color=list(reversed(colours)),
+            text=top[y_col].apply(
+                lambda v: f"{int(v):,}" if float(v) == int(float(v)) else f"{float(v):,.1f}"),
+            textposition='auto',
+        ))
+        fig.update_layout(**PT, height=max(280, n * 36 + 80), title=title_txt,
+                          xaxis_title=y_col.replace("_"," ").title(),
+                          yaxis=dict(autorange='reversed'))
+
+        if len(df.columns) > 2:
+            tc, td = st.tabs(["📊 Chart View", "📋 Data View"])
+            with tc:
+                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_bar")
+                if len(df) > 10:
+                    st.caption(f"Top 10 of {len(df):,} results — full data in Data View.")
+            with td:
+                st.dataframe(df, use_container_width=True, hide_index=True, height=320)
+                st.download_button("📥 CSV", df.to_csv(index=False),
+                                   "export.csv", "text/csv", key=f"{key_prefix}_dl_bar")
+        else:
+            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_bar_s")
+            if len(df) > 10:
+                st.caption(f"Top 10 of {len(df):,} results.")
+
+        if show_save_button:
+            _db_save_pin(df, fig, query_text, chart_type, key_prefix)
+        return fig
+
+    # ── 4. Pie / donut chart ──────────────────────────────────────────────
+    if chart_type == 'pie' and str_cols and num_cols:
+        plot_df = df.head(10) if len(df) > 10 else df
+        fig = px.pie(plot_df, names=str_cols[0], values=num_cols[0],
+                     title=title_txt, hole=0.42,
+                     color_discrete_sequence=PT['colorway'])
+        fig.update_layout(**PT, height=340)
+        fig.update_traces(textposition='inside', textinfo='percent+label')
+
+        if len(df.columns) > 2:
+            tc, td = st.tabs(["🥧 Chart View", "📋 Data View"])
+            with tc: st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_pie")
+            with td:
+                st.dataframe(df, use_container_width=True, hide_index=True, height=320)
+                st.download_button("📥 CSV", df.to_csv(index=False),
+                                   "export.csv", "text/csv", key=f"{key_prefix}_dl_pie")
+        else:
+            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_pie_s")
+
+        if show_save_button:
+            _db_save_pin(df, fig, query_text, chart_type, key_prefix)
+        return fig
+
+    # ── 5. Multi-column → tabbed Chart + Data ────────────────────────────
+    if len(df.columns) >= 2:
+        tc, td = st.tabs(["📊 Chart View", "📋 Data View"])
+        with tc:
+            if str_cols and num_cols:
+                top = df.nlargest(10, num_cols[0]) if len(df) > 10 else df.sort_values(num_cols[0], ascending=False)
+                fig = px.bar(top, x=str_cols[0], y=num_cols[0], title=title_txt,
+                             color_discrete_sequence=['#7c3aed'])
+                fig.update_layout(**PT, height=340); fig.update_xaxes(tickangle=-30)
+                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_multi")
+                if len(df) > 10: st.caption(f"Chart shows top 10 of {len(df):,} rows.")
+            else:
+                st.info("No numeric column detected — showing data table only.")
+        with td:
+            if num_cols:
+                mc = st.columns(min(4, len(num_cols)))
+                for i, nc in enumerate(num_cols[:4]):
+                    try: mc[i].metric(nc.replace("_"," ").title(), f"{df[nc].sum():,.0f}")
+                    except Exception: pass
+            st.dataframe(df, use_container_width=True, hide_index=True, height=340)
+            st.download_button("📥 CSV", df.to_csv(index=False),
+                               "export.csv", "text/csv", key=f"{key_prefix}_dl_multi")
+
+        if show_save_button:
+            _db_save_pin(df, fig, query_text, chart_type, key_prefix)
+        return fig
+
+    # ── 6. Fallback — table only ──────────────────────────────────────────
+    st.dataframe(df, use_container_width=True, hide_index=True, height=300)
+    if show_save_button:
+        _db_save_pin(df, None, query_text, chart_type, key_prefix)
+    return None
+
+
+def page_custom_dashboard():
+    reg = st.session_state.current_region
+    pin_count = len(st.session_state.dashboard_pins)
+
+    st.markdown('<div class="page-header">📐 Custom Dashboard Builder</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="page-sub">'
+        f'Generate visualisations on the fly with natural language · '
+        f'<b>{reg}</b> · '
+        f'<span class="db-query-pill">📌 {pin_count} pinned</span>'
+        f'</div>', unsafe_allow_html=True)
+
+    # ── Query toolbar ──────────────────────────────────────────────────────
+    with st.container(border=True):
+        ci, cr = st.columns([5, 1])
+        with ci:
+            prefill = st.session_state.pop("_db_prefill", "")
+            query_text = st.text_input(
+                "NL query", value=prefill,
+                placeholder='e.g. "Rights expiring in 30 days" or "Distribution by territory"',
+                label_visibility="collapsed", key="db_nl_query")
+        with cr:
+            run_clicked = st.button("▶ Run", type="primary",
+                                    use_container_width=True, key="db_run")
+
+        ta, tb, tc_ = st.columns(3)
+        show_sql_db  = ta.toggle("Show SQL", value=st.session_state.user_prefs.get('show_sql', True), key="db_show_sql")
+        export_on    = tb.toggle("Auto CSV export", value=True, key="db_export")
+        tc_.markdown(
+            f'<div style="font-size:.78rem;color:#64748b;padding-top:6px">'
+            f'📍 <b>{reg}</b> · <b>{st.session_state.persona}</b></div>',
+            unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ── Execute query ──────────────────────────────────────────────────────
+    if run_clicked and query_text.strip():
+        with st.spinner("Parsing and fetching…"):
+            sql, parse_err, chart_type, region_ctx = parse_query(query_text.strip(), reg)
+
+        if parse_err:
+            st.error(f"❌ Parser error: {parse_err}")
+        elif not sql:
+            st.warning("Could not generate SQL for that query.")
+            _db_suggested_queries("fail")
+        else:
+            if show_sql_db:
+                st.markdown(f'<div class="sql-box">{html.escape(sql)}</div>',
+                            unsafe_allow_html=True)
+
+            res_df, db_err = execute_sql(sql, DB_CONN)
+
+            if db_err:
+                st.error(f"❌ Database error: {db_err}")
+            elif res_df is None or res_df.empty:
+                st.warning(
+                    f"No records returned for **{region_ctx}**. "
+                    f"Try one of the suggested queries below.")
+                _db_suggested_queries("no_results")
+            else:
+                # Store for downstream Save button
+                st.session_state.dashboard_last_df   = res_df.copy()
+                st.session_state.dashboard_last_meta = {
+                    "query": query_text.strip(), "sql": sql,
+                    "chart_type": chart_type, "region": region_ctx,
+                }
+
+                # Result header
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">'
+                    f'<span style="font-size:.85rem;font-weight:700;color:#0f172a">'
+                    f'📊 {len(res_df):,} records · {region_ctx}</span>'
+                    f'<span class="db-query-pill">chart: {chart_type}</span>'
+                    f'</div>', unsafe_allow_html=True)
+
+                render_dynamic_dashboard(
+                    res_df.copy(), chart_type, query_text.strip(),
+                    key_prefix="live", show_save_button=True)
+
+                if export_on:
+                    st.download_button(
+                        "📥 Download full CSV",
+                        res_df.to_csv(index=False),
+                        f"dashboard_{region_ctx}.csv", "text/csv",
+                        key="db_dl_full")
+
+    elif not query_text.strip():
+        # Empty state
+        st.markdown("""
+        <div class="db-empty">
+          <div class="db-empty-icon">📐</div>
+          <div class="db-empty-title">Build a chart with natural language</div>
+          <div class="db-empty-body">
+            Type a question above and click <b>▶ Run</b> to generate a dynamic visualisation.<br>
+            Results are automatically mapped to the best chart type based on your query and data shape.<br><br>
+            <b>Routing logic:</b><br>
+            Single value → metric card &nbsp;·&nbsp;
+            "trend" / date column → line chart &nbsp;·&nbsp;
+            category + number → horizontal bar top-10 &nbsp;·&nbsp;
+            status/type breakdown → donut pie &nbsp;·&nbsp;
+            multi-column result → tabbed Chart + Data view
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+        _db_suggested_queries("empty")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # PINNED DASHBOARD GRID
+    # ══════════════════════════════════════════════════════════════════════
+    if st.session_state.dashboard_pins:
+        st.markdown("---")
+        hc, hl, hx = st.columns([4, 2, 2])
+        hc.markdown(
+            f'<div style="font-size:1.05rem;font-weight:800;color:#0f172a">'
+            f'📌 Pinned Dashboard '
+            f'<span style="font-size:.8rem;color:#7c3aed;font-weight:600">'
+            f'({pin_count} cards)</span></div>', unsafe_allow_html=True)
+        two_col = hl.toggle("2-column layout", value=True, key="db_2col")
+        if hx.button("🗑 Clear all pins", key="db_clear"):
+            st.session_state.dashboard_pins = []
+            st.rerun()
+
+        pins   = st.session_state.dashboard_pins
+        n_cols = 2 if two_col else 1
+
+        for row_start in range(0, len(pins), n_cols):
+            grid_cols = st.columns(n_cols)
+            for ci2 in range(n_cols):
+                pi = row_start + ci2
+                if pi >= len(pins):
+                    break
+                pin = pins[pi]
+                with grid_cols[ci2]:
+                    # Card header bar
+                    st.markdown(
+                        f'<div class="db-card-header">'
+                        f'<span class="db-card-title">{html.escape(pin["title"])}</span>'
+                        f'<span class="db-card-ts">{pin["ts"]}</span>'
+                        f'</div>', unsafe_allow_html=True)
+
+                    with st.container(border=True):
+                        st.markdown(
+                            f'<div style="margin-bottom:6px">'
+                            f'<span class="db-query-pill">📍 {pin["region"]}</span>'
+                            f'<span class="db-query-pill">chart: {pin["chart_type"]}</span>'
+                            f'</div>', unsafe_allow_html=True)
+
+                        if pin["fig"] is not None:
+                            st.plotly_chart(pin["fig"], use_container_width=True,
+                                            key=f"pin_{pi}_{hash(pin['ts'])}")
+                        else:
+                            # Re-render metric card
+                            df_pin = pin["df"]
+                            if not df_pin.empty:
+                                nc_ = [c for c in df_pin.columns
+                                       if pd.api.types.is_numeric_dtype(df_pin[c])]
+                                raw = df_pin[nc_[0]].iloc[0] if nc_ else df_pin.iloc[0, -1]
+                                try:
+                                    v = float(raw)
+                                    disp = f"{v:,.0f}" if v == int(v) else f"{v:,.2f}"
+                                except (ValueError, TypeError):
+                                    disp = str(raw)
+                                st.markdown(
+                                    f'<div class="db-metric-card" style="padding:14px 18px">'
+                                    f'<div class="db-metric-value" style="font-size:2rem">{disp}</div>'
+                                    f'<div class="db-metric-sub">{html.escape(pin["title"])}</div>'
+                                    f'</div>', unsafe_allow_html=True)
+
+                        pa, pb = st.columns(2)
+                        with pa:
+                            st.download_button("📥 CSV", pin["df"].to_csv(index=False),
+                                               f"pin_{pi}.csv", "text/csv",
+                                               key=f"pin_dl_{pi}", use_container_width=True)
+                        with pb:
+                            if st.button("✕ Unpin", key=f"pin_rm_{pi}",
+                                         use_container_width=True):
+                                st.session_state.dashboard_pins.pop(pi)
+                                st.rerun()
+
+
 # ── Router ─────────────────────────────────────────────────────────────────────
 {
     "rights":      page_rights,
@@ -2407,4 +2794,5 @@ def page_title_360():
     "alerts":      page_alerts,
     "title_360":   page_title_360,
     "chat":        page_chat,
+    "dashboard":   page_custom_dashboard,
 }.get(st.session_state.page, page_rights)()
