@@ -1,5 +1,21 @@
 """
-query_parser.py — Foundry Vantage NL→SQL engine (IMPROVED)
+query_parser.py — Foundry Vantage NL→SQL engine
+Converts plain-English questions into SQLite queries against the Rights Explorer schema.
+Intent routing order (priority):
+1. Do-Not-Air (DNA) restrictions
+2. Movies / Films
+3. Elemental rights
+4. Sales / Rights-Out
+5. Rights expiry alerts
+6. Specific-title rights detail
+7. Rights by count / platform
+8. Rights by season hierarchy
+9. Exhibition restrictions
+10. Rights breakdown / analytics
+11. Deals (vendor contracts)
+12. Work orders / operational
+13. Title catalog
+14. Generic fallback (media_rights overview)
 """
 import re
 from typing import Tuple, Optional, List
@@ -53,13 +69,60 @@ def _apply_ontology(q):
     return q
 
 def _extract_regions(q):
-    """IMPROVED: Extract ALL regions mentioned in query"""
+    """Extract ALL regions mentioned in query"""
     found_regions = []
     q_upper = q.upper()
     for r in REGION_CANONICAL:
         if r in q_upper:
             found_regions.append(r)
-    return found_regions if found_regions else ["NA"]  # Default to NA if none found
+    return found_regions if found_regions else None
+
+def _extract_date_range(q):
+    """
+    Extract date filters from natural language
+    Returns: (start_date, end_date, sql_filter) or (None, None, "1=1")
+    """
+    today = datetime.now()
+    
+    # Pattern: "last X days"
+    match = re.search(r'last\s+(\d+)\s+days?', q)
+    if match:
+        days = int(match.group(1))
+        start = today - timedelta(days=days)
+        return start, today, f"deal_date >= DATE('now', '-{days} days')"
+    
+    # Pattern: "last X weeks"
+    match = re.search(r'last\s+(\d+)\s+weeks?', q)
+    if match:
+        weeks = int(match.group(1))
+        days = weeks * 7
+        start = today - timedelta(days=days)
+        return start, today, f"deal_date >= DATE('now', '-{days} days')"
+    
+    # Pattern: "last X months"
+    match = re.search(r'last\s+(\d+)\s+months?', q)
+    if match:
+        months = int(match.group(1))
+        days = months * 30  # Approximate
+        start = today - timedelta(days=days)
+        return start, today, f"deal_date >= DATE('now', '-{days} days')"
+    
+    # Pattern: "in YYYY"
+    match = re.search(r'(?:in|year)\s*(\d{4})', q)
+    if match:
+        year = int(match.group(1))
+        return (datetime(year, 1, 1), datetime(year, 12, 31),
+                f"deal_date BETWEEN '{year}-01-01' AND '{year}-12-31'")
+    
+    # Pattern: "between DATE and DATE"
+    match = re.search(r'between\s+(\d{4}-\d{2}-\d{2})\s+and\s+(\d{4}-\d{2}-\d{2})', q)
+    if match:
+        start, end = match.group(1), match.group(2)
+        return (datetime.strptime(start, '%Y-%m-%d'), 
+                datetime.strptime(end, '%Y-%m-%d'),
+                f"deal_date BETWEEN '{start}' AND '{end}'")
+    
+    return None, None, "1=1"  # No date filter
 
 def _extract_platforms(q):
     q2 = _apply_ontology(q.lower())
@@ -89,62 +152,11 @@ def _extract_title_hints(q):
             return s
     return None
 
-def _extract_date_range(q):
-    """
-    NEW: Extract date range from natural language
-    Examples:
-    - "last 60 days" → (datetime.now() - timedelta(days=60), datetime.now())
-    - "last 3 months" → (datetime.now() - timedelta(days=90), datetime.now())
-    - "in 2024" → (datetime(2024,1,1), datetime(2024,12,31))
-    """
-    today = datetime.now()
-    
-    # Pattern: "last X days"
-    days_match = re.search(r'last\s+(\d+)\s+days?', q)
-    if days_match:
-        days = int(days_match.group(1))
-        start_date = today - timedelta(days=days)
-        return start_date, today, f"date >= DATE('now', '-{days} days')"
-    
-    # Pattern: "last X weeks"
-    weeks_match = re.search(r'last\s+(\d+)\s+weeks?', q)
-    if weeks_match:
-        weeks = int(weeks_match.group(1))
-        days = weeks * 7
-        start_date = today - timedelta(days=days)
-        return start_date, today, f"date >= DATE('now', '-{days} days')"
-    
-    # Pattern: "last X months"
-    months_match = re.search(r'last\s+(\d+)\s+months?', q)
-    if months_match:
-        months = int(months_match.group(1))
-        days = months * 30  # Approximate
-        start_date = today - timedelta(days=days)
-        return start_date, today, f"date >= DATE('now', '-{days} days')"
-    
-    # Pattern: "in YYYY" or "year YYYY"
-    year_match = re.search(r'(?:in|year)\s*(\d{4})', q)
-    if year_match:
-        year = int(year_match.group(1))
-        return (datetime(year, 1, 1), datetime(year, 12, 31), 
-                f"date BETWEEN '{year}-01-01' AND '{year}-12-31'")
-    
-    # Pattern: "between DATE and DATE"
-    between_match = re.search(r'between\s+(\d{4}-\d{2}-\d{2})\s+and\s+(\d{4}-\d{2}-\d{2})', q)
-    if between_match:
-        start = between_match.group(1)
-        end = between_match.group(2)
-        return (datetime.strptime(start, '%Y-%m-%d'), 
-                datetime.strptime(end, '%Y-%m-%d'),
-                f"date BETWEEN '{start}' AND '{end}'")
-    
-    return None, None, "1=1"  # No date filter
-
 def _region_where(regions, col="region"):
-    """IMPROVED: Handle multiple regions"""
-    if not regions: 
+    """Handle None and empty lists properly"""
+    if not regions:
         return "1=1"
-    if len(regions) == 1: 
+    if len(regions) == 1:
         return f"UPPER({col}) = '{regions[0]}'"
     joined = "','".join(regions)
     return f"UPPER({col}) IN ('{joined}')"
@@ -155,7 +167,9 @@ def _platform_like(platforms, col):
     return "(" + " OR ".join(f"{col} LIKE '%{p}%'" for p in platforms) + ")"
 
 def _title_like(hint, col="title_name"):
-    return f"LOWER({col}) LIKE '%{hint.lower()}%'"
+    # Basic sanitization to prevent SQL injection
+    safe_hint = hint.replace("'", "''").replace(";", "")[:100]
+    return f"LOWER({col}) LIKE '%{safe_hint.lower()}%'"
 
 def _is_movie_query(q):
     return any(kw in q for kw in MOVIE_KW)
@@ -790,7 +804,7 @@ class QueryParser:
             
             sql = f"""
                 SELECT deal_id, deal_name, vendor_name, deal_type,
-                       deal_value, rights_scope, territory,
+                       deal_value, rights_scope, territory, region,
                        deal_date, expiry_date, status, payment_status,
                        CAST(JULIANDAY(expiry_date)-JULIANDAY('now') AS INTEGER) AS days_to_expiry
                 FROM deals 
