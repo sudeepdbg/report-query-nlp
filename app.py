@@ -2503,46 +2503,45 @@ def render_dynamic_dashboard(
             _db_save_pin(df, fig, query_text, chart_type, key_prefix)
         return fig
 
-    # ── 3. Bar chart → horizontal bar, top-10, gradient ──────────────────
-    if chart_type == 'bar' and str_cols and num_cols:
-        x_col = str_cols[0]
-        y_col = num_cols[0]
-        top   = df.nlargest(10, y_col) if len(df) > 10 else df.sort_values(y_col, ascending=False)
-        n     = len(top)
-        colours = [f"rgba(124,58,237,{0.35 + 0.65*(i/max(n-1,1)):.2f})" for i in range(n)]
+# ── 3. Bar chart → horizontal bar, top-10, gradient ──────────────────
+if chart_type == 'bar' and str_cols and num_cols:
+    x_col = str_cols[0]
+    y_col = num_cols[0]
+    top = df.nlargest(10, y_col) if len(df) > 10 else df.sort_values(y_col, ascending=False)
+    n = len(top)
+    colours = [f"rgba(124,58,237,{0.35 + 0.65*(i/max(n-1,1)):.2f})" for i in range(n)]
 
-        fig = go.Figure(go.Bar(
-            y=top[x_col].astype(str),
-            x=top[y_col],
-            orientation='h',
-            marker_color=list(reversed(colours)),
-            text=top[y_col].apply(
-                lambda v: f"{int(v):,}" if float(v) == int(float(v)) else f"{float(v):,.1f}"),
-            textposition='auto',
-        ))
-        fig.update_layout(**PT, height=max(280, n * 36 + 80), title=title_txt,
-                          xaxis_title=y_col.replace("_"," ").title(),
-                          yaxis=dict(autorange='reversed'))
+    fig = go.Figure(go.Bar(
+        y=top[x_col].astype(str),
+        x=top[y_col],
+        orientation='h',
+        marker_color=list(reversed(colours)),
+        text=top[y_col].apply(
+            lambda v: f"{int(v):,}" if float(v) == int(float(v)) else f"{float(v):,.1f}"),
+        textposition='auto',
+    ))
+    fig.update_layout(**PT, height=max(280, n * 36 + 80), title=title_txt,
+                      xaxis_title=y_col.replace("_", " ").title(),
+                      yaxis=dict(autorange='reversed'))
 
-        if len(df.columns) > 2:
-            tc, td = st.tabs(["📊 Chart View", "📋 Data View"])
-            with tc:
-                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_bar")
-                if len(df) > 10:
-                    st.caption(f"Top 10 of {len(df):,} results — full data in Data View.")
-            with td:
-                st.dataframe(df, use_container_width=True, hide_index=True, height=320)
-                st.download_button("📥 CSV", df.to_csv(index=False),
-                                   "export.csv", "text/csv", key=f"{key_prefix}_dl_bar")
-        else:
-            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_bar_s")
+    if len(df.columns) > 2:
+        tc, td = st.tabs(["📊 Chart View", "📋 Data View"])
+        with tc:
+            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_bar")
             if len(df) > 10:
-                st.caption(f"Top 10 of {len(df):,} results.")
+                st.caption(f"Top 10 of {len(df):,} results — full data in Data View.")
+        with td:
+            st.dataframe(df, use_container_width=True, hide_index=True, height=320)
+            st.download_button("📥 CSV", df.to_csv(index=False),
+                               "export.csv", "text/csv", key=f"{key_prefix}_dl_bar")
+    else:
+        st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_bar_s")
+        if len(df) > 10:
+            st.caption(f"Top 10 of {len(df):,} results.")
 
-        if show_save_button:
-            _db_save_pin(df, fig, query_text, chart_type, key_prefix)
-        return fig
-
+    if show_save_button:
+        _db_save_pin(df, fig, query_text, chart_type, key_prefix)
+    return fig
     # ── 4. Pie / donut chart ──────────────────────────────────────────────
     if chart_type == 'pie' and str_cols and num_cols:
         plot_df = df.head(10) if len(df) > 10 else df
