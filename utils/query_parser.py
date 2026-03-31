@@ -1,5 +1,5 @@
 """
-query_parser.py — Foundry Vantage NL→SQL engine (v2.0)
+query_parser.py — Foundry Vantage NL→SQL engine
 Converts plain-English questions into SQLite queries against the Rights Explorer schema.
 
 SUPPORTED TABLES (14):
@@ -19,7 +19,6 @@ CROSS-TABLE JOIN PATTERNS (15+):
 - titles + rights + DNA + sales
 - work_orders + rights expiry
 - elemental + deals
-- And more...
 """
 import re
 from typing import Tuple, Optional, List
@@ -52,7 +51,7 @@ MOVIE_VOCAB = {
 }
 MOVIE_KW = MOVIE_TITLES | MOVIE_VOCAB
 
-# FIXED: No trailing spaces
+# FIXED: No trailing spaces in region codes
 REGION_CANONICAL = {"NA", "APAC", "EMEA", "LATAM"}
 ALL_MEDIA = ["PayTV", "STB-VOD", "SVOD", "FAST", "CatchUp", "StartOver",
              "Simulcast", "TempDownload", "DownloadToOwn"]
@@ -75,7 +74,10 @@ def _apply_ontology(q):
     return q
 
 def _extract_regions(q):
-    """Extract ALL regions mentioned in query (supports multiple regions)"""
+    """
+    FIXED: Extract ALL regions mentioned in query.
+    Now works without requiring prepositions like "in" or "for".
+    """
     found_regions = []
     q_upper = q.upper()
     for r in REGION_CANONICAL:
@@ -85,8 +87,11 @@ def _extract_regions(q):
 
 def _extract_date_range(q):
     """
-    Extract date filters from natural language
-    Returns: sql_filter string or "1=1" if no date filter
+    NEW: Extract date filters from natural language.
+    Examples:
+    - "last 60 days" → deal_date >= DATE('now', '-60 days')
+    - "last 3 months" → deal_date >= DATE('now', '-90 days')
+    - "in 2024" → deal_date BETWEEN '2024-01-01' AND '2024-12-31'
     """
     # Pattern: "last X days"
     match = re.search(r'last\s+(\d+)\s+days?', q)
@@ -120,7 +125,7 @@ def _extract_date_range(q):
         start, end = match.group(1), match.group(2)
         return f"deal_date BETWEEN '{start}' AND '{end}'"
     
-    return "1=1"
+    return "1=1"  # No date filter
 
 def _extract_platforms(q):
     q2 = _apply_ontology(q.lower())
@@ -151,7 +156,10 @@ def _extract_title_hints(q):
     return None
 
 def _region_where(regions, col="region"):
-    """Handle single or multiple regions properly"""
+    """
+    FIXED: Handle single or multiple regions properly.
+    Generates: UPPER(region) = 'NA' OR UPPER(region) IN ('LATAM','EMEA')
+    """
     if not regions:
         return "1=1"
     if len(regions) == 1:
@@ -183,24 +191,12 @@ def _movie_cat_filter(q, prefix="m"):
         return f"AND {prefix}.content_category = 'Direct-to-Streaming'"
     return ""
 
-# ── Cross-table join patterns (ENHANCED) ──────────────────────────────────────
+# ── Cross-table join patterns ────────────────────────────────────────────────
 
 def _detect_cross_intent(q):
     """
-    Detect when user wants data from 2+ distinct tables.
-    Returns join pattern name or None.
-    
-    SUPPORTED PATTERNS:
-    - deals_rights: deals + media_rights
-    - vendors_workorders: vendors + work_orders
-    - movies_dna_sales: movies + DNA + sales_deal
-    - title_health: title + rights + DNA + sales
-    - expiry_sales: expiring rights + sales deals
-    - workorder_rights: work orders + rights expiry
-    - elemental_deals: elemental rights + deals
-    - movies_dna: movies + DNA flags
-    - movies_sales: movies + sales / buyer
-    - title_sales: specific title + sales deal lookup
+    Detects when user wants data from 2+ distinct tables.
+    Returns intent type or None.
     """
     has_movie   = any(kw in q for kw in MOVIE_KW)
     has_rights  = any(kw in q for kw in RIGHTS_KW) or any(kw in q for kw in EXPIRY_KW)
@@ -210,26 +206,12 @@ def _detect_cross_intent(q):
     has_expiry  = any(kw in q for kw in EXPIRY_KW)
     has_title   = any(kw in q for kw in TITLE_KW) or any(kw in q for kw in MOVIE_KW)
     has_deals   = any(kw in q for kw in DEAL_KW)
-    has_vendor  = any(kw in q for kw in VENDOR_KW)
-    has_elemental = any(kw in q for kw in ELEMENTAL_KW)
     
-    # Rank by specificity — most specific first
-    
-    # NEW: Deals + Rights combination
+    # NEW: Detect deals + rights combination
     if has_deals and has_rights:
         return "deals_rights"
     
-    # NEW: Vendors + Work Orders combination
-    if has_vendor and has_work:
-        return "vendors_workorders"
-    
-    # NEW: Elemental + Deals combination
-    if has_elemental and has_deals:
-        return "elemental_deals"
-    
-    # Existing patterns
-    if has_movie and has_dna and has_sales:
-        return "movies_dna_sales"
+    # Rank by specificity — most specific first
     if has_movie and has_dna:
         return "movie_dna"
     if has_movie and has_sales:
@@ -242,7 +224,6 @@ def _detect_cross_intent(q):
         return "workorder_rights"
     if has_title and has_sales:
         return "title_sales"
-    
     return None
 
 # ── Main parser ──────────────────────────────────────────────────────────────
@@ -252,25 +233,25 @@ class QueryParser:
     def generate_sql(cls, question, selected_region):
         q = question.lower().strip()
         
-        # ── Region resolution (SUPPORTS MULTIPLE REGIONS) ───────────────────
+        # ── FIXED: Region resolution ───────────────────────────────────────
+        # Always use regions mentioned in query text (no preposition required)
         text_regions = _extract_regions(q)
         if text_regions:
-            # If regions are explicitly mentioned in query, use them
             regions = text_regions
         else:
             regions = [selected_region]
         
-        # ── Date range extraction ───────────────────────────────────────────
+        # NEW: Extract date range for deals queries
         date_filter = _extract_date_range(q)
         
         region_ctx = " vs ".join(regions) if len(regions) > 1 else regions[0]
         rw = _region_where(regions)
         rw_mr = _region_where(regions, "mr.region")
         rw_t = _region_where(regions, "t.region")
-        rw_deals = _region_where(regions, "region")
+        rw_deals = _region_where(regions, "d.region")  # FIXED: Qualified with table alias
+        rw_sales = _region_where(regions, "sd.region")
         rw_vendors = _region_where(regions, "v.region")
         rw_wo = _region_where(regions, "wo.region")
-        rw_sales = _region_where(regions, "sd.region")
         
         platforms = _extract_platforms(q)
         plat_mr = _platform_like(platforms, "mr.media_platform_primary") if platforms else "1=1"
@@ -279,13 +260,8 @@ class QueryParser:
         # ── 0. CROSS-TABLE JOIN QUERIES (highest priority) ─────────────────
         cross = _detect_cross_intent(q)
         
-        # ── NEW: Deals + Rights Join ───────────────────────────────────────
+        # NEW: Deals + Rights combination
         if cross == "deals_rights":
-            """
-            Query: "LATAM and EMEA deals and rights in last 60 days"
-            Returns: Combined view of deals with their associated rights
-            """
-            # Build WHERE clause with date filter
             where_parts = [rw_deals]
             if date_filter != "1=1":
                 where_parts.append(date_filter)
@@ -301,13 +277,12 @@ class QueryParser:
                     d.deal_date,
                     d.expiry_date,
                     d.status AS deal_status,
-                    d.territory AS deal_territory,
+                    d.region,
                     mr.title_name,
                     mr.rights_type,
                     mr.media_platform_primary,
                     mr.term_to AS rights_expiry,
-                    mr.status AS rights_status,
-                    mr.territories AS rights_territories
+                    mr.status AS rights_status
                 FROM deals d
                 LEFT JOIN media_rights mr ON d.territory LIKE '%' || mr.territories || '%'
                 WHERE {where_clause}
@@ -316,96 +291,6 @@ class QueryParser:
             """
             return sql.strip(), None, 'table', region_ctx
         
-        # ── NEW: Vendors + Work Orders Join ────────────────────────────────
-        if cross == "vendors_workorders":
-            """
-            Query: "vendors and work orders performance"
-            Returns: Vendor details with their work order metrics
-            """
-            sql = f"""
-                SELECT 
-                    v.vendor_id,
-                    v.vendor_name,
-                    v.vendor_type,
-                    v.rating,
-                    v.total_spend,
-                    COUNT(wo.work_order_id) AS total_orders,
-                    SUM(CASE WHEN wo.status = 'Completed' THEN 1 ELSE 0 END) AS completed_orders,
-                    SUM(CASE WHEN wo.status = 'Delayed' THEN 1 ELSE 0 END) AS delayed_orders,
-                    AVG(wo.quality_score) AS avg_quality,
-                    SUM(wo.cost) AS total_cost,
-                    SUM(CASE WHEN wo.billing_status = 'Overdue' THEN 1 ELSE 0 END) AS overdue_count
-                FROM vendors v
-                LEFT JOIN work_orders wo ON v.vendor_id = wo.vendor_id
-                WHERE {rw_vendors}
-                GROUP BY v.vendor_id
-                ORDER BY total_orders DESC
-                LIMIT 100
-            """
-            return sql.strip(), None, 'table', region_ctx
-        
-        # ── NEW: Elemental + Deals Join ────────────────────────────────────
-        if cross == "elemental_deals":
-            """
-            Query: "elemental rights and deals"
-            Returns: Elemental rights with their associated deal information
-            """
-            sql = f"""
-                SELECT 
-                    er.elemental_rights_id,
-                    er.title_name,
-                    er.media_platform_primary,
-                    er.territories,
-                    er.language,
-                    er.term_from,
-                    er.term_to,
-                    er.status AS rights_status,
-                    ed.deal_name,
-                    ed.deal_source,
-                    ed.deal_type,
-                    ed.deal_value,
-                    ed.status AS deal_status
-                FROM elemental_rights er
-                JOIN elemental_deal ed ON er.elemental_deal_id = ed.elemental_deal_id
-                WHERE {rw}
-                ORDER BY er.term_to ASC
-                LIMIT 200
-            """
-            return sql.strip(), None, 'table', region_ctx
-        
-        # ── Movies + DNA + Sales (3-table join) ────────────────────────────
-        if cross == "movies_dna_sales":
-            cat_f = _movie_cat_filter(q, "m")
-            sql = f"""
-                SELECT
-                    m.movie_title,
-                    m.content_category,
-                    m.genre,
-                    m.box_office_gross_usd_m AS box_office_usd_m,
-                    m.franchise,
-                    COUNT(DISTINCT mr.rights_id) AS active_rights,
-                    COUNT(DISTINCT dna.dna_id) AS dna_flags,
-                    GROUP_CONCAT(DISTINCT dna.reason_category) AS dna_reasons,
-                    GROUP_CONCAT(DISTINCT dna.territory) AS restricted_territories,
-                    COUNT(DISTINCT sd.sales_deal_id) AS sales_deals,
-                    GROUP_CONCAT(DISTINCT sd.buyer) AS buyers,
-                    SUM(sd.deal_value) AS total_sales_value,
-                    CASE WHEN COUNT(dna.dna_id) > 0 THEN '🚫 Flagged' ELSE '✅ Clean' END AS dna_status
-                FROM movie m
-                LEFT JOIN title t ON t.movie_id = m.movie_id
-                LEFT JOIN media_rights mr ON mr.title_id = t.title_id
-                  AND UPPER(mr.region) = '{regions[0]}' AND mr.status = 'Active'
-                LEFT JOIN do_not_air dna ON dna.title_id = t.title_id AND dna.active = 1
-                LEFT JOIN sales_deal sd ON sd.title_id = t.title_id
-                  AND UPPER(sd.region) = '{regions[0]}'
-                WHERE 1=1 {cat_f}
-                GROUP BY m.movie_id
-                ORDER BY dna_flags DESC, total_sales_value DESC
-                LIMIT 150
-            """
-            return sql.strip(), None, 'table', region_ctx
-        
-        # ── Title Health (4-table join) ────────────────────────────────────
         if cross == "title_health":
             title_f = f"AND {_title_like(title_hint,'t.title_name')}" if title_hint else ""
             cat_f = _movie_cat_filter(q, "t")
@@ -426,10 +311,10 @@ class QueryParser:
                     GROUP_CONCAT(DISTINCT sd.buyer) AS buyers
                 FROM title t
                 LEFT JOIN media_rights mr ON t.title_id = mr.title_id
-                  AND UPPER(mr.region) = '{regions[0]}'
+                  AND {rw_mr}
                 LEFT JOIN do_not_air dna ON t.title_id = dna.title_id AND dna.active = 1
                 LEFT JOIN sales_deal sd ON t.title_id = sd.title_id
-                  AND UPPER(sd.region) = '{regions[0]}'
+                  AND {rw_sales}
                 WHERE {rw_t} {title_f} {cat_f}
                 GROUP BY t.title_id
                 ORDER BY dna_count DESC, expiring_90d DESC, active_rights DESC
@@ -437,7 +322,6 @@ class QueryParser:
             """
             return sql.strip(), None, 'table', region_ctx
         
-        # ── Expiry + Sales ─────────────────────────────────────────────────
         if cross == "expiry_sales":
             days = 90
             for d in re.findall(r'\b(\d+)\s*day', q):
@@ -462,8 +346,8 @@ class QueryParser:
                 FROM media_rights mr
                 JOIN content_deal cd ON mr.deal_id = cd.deal_id
                 LEFT JOIN sales_deal sd ON mr.title_id = sd.title_id
-                  AND UPPER(sd.region) = '{regions[0]}'
-                WHERE UPPER(mr.region) = '{regions[0]}'
+                  AND {rw_sales}
+                WHERE {rw_mr}
                   AND mr.status = 'Active'
                   AND mr.term_to <= DATE('now', '+{days} days')
                   AND mr.term_to >= DATE('now')
@@ -473,7 +357,6 @@ class QueryParser:
             """
             return sql.strip(), None, 'table', region_ctx
         
-        # ── Work Orders + Rights ───────────────────────────────────────────
         if cross == "workorder_rights":
             sql = f"""
                 SELECT
@@ -493,7 +376,7 @@ class QueryParser:
                 FROM work_orders wo
                 LEFT JOIN title t ON wo.title_id = t.title_id
                 LEFT JOIN media_rights mr ON t.title_id = mr.title_id
-                  AND UPPER(mr.region) = '{regions[0]}' AND mr.status = 'Active'
+                  AND {rw_mr} AND mr.status = 'Active'
                 WHERE {rw_wo}
                 GROUP BY wo.work_order_id
                 ORDER BY rights_expiring_90d DESC, wo.due_date ASC
@@ -501,7 +384,6 @@ class QueryParser:
             """
             return sql.strip(), None, 'table', region_ctx
         
-        # ── Movie + DNA ────────────────────────────────────────────────────
         if cross == "movie_dna":
             cat_f = _movie_cat_filter(q, "m")
             sql = f"""
@@ -520,7 +402,7 @@ class QueryParser:
                 FROM movie m
                 LEFT JOIN title t ON t.movie_id = m.movie_id
                 LEFT JOIN media_rights mr ON mr.title_id = t.title_id
-                  AND UPPER(mr.region) = '{regions[0]}' AND mr.status = 'Active'
+                  AND {rw_mr} AND mr.status = 'Active'
                 LEFT JOIN do_not_air dna ON dna.title_id = t.title_id AND dna.active = 1
                 WHERE 1=1 {cat_f}
                 GROUP BY m.movie_id
@@ -528,7 +410,6 @@ class QueryParser:
             """
             return sql.strip(), None, 'table', region_ctx
         
-        # ── Movie + Sales ──────────────────────────────────────────────────
         if cross == "movie_sales":
             cat_f = _movie_cat_filter(q, "m")
             sql = f"""
@@ -550,9 +431,9 @@ class QueryParser:
                 FROM movie m
                 JOIN title t ON t.movie_id = m.movie_id
                 LEFT JOIN sales_deal sd ON sd.title_id = t.title_id
-                  AND UPPER(sd.region) = '{regions[0]}'
+                  AND {rw_sales}
                 LEFT JOIN media_rights mr ON mr.title_id = t.title_id
-                  AND UPPER(mr.region) = '{regions[0]}' AND mr.status = 'Active'
+                  AND {rw_mr} AND mr.status = 'Active'
                 WHERE 1=1 {cat_f}
                 GROUP BY m.movie_id, sd.sales_deal_id
                 ORDER BY sd.deal_value DESC NULLS LAST, m.box_office_gross_usd_m DESC
@@ -560,7 +441,6 @@ class QueryParser:
             """
             return sql.strip(), None, 'table', region_ctx
         
-        # ── Title + Sales ──────────────────────────────────────────────────
         if cross == "title_sales":
             title_f = f"AND {_title_like(title_hint,'t.title_name')}" if title_hint else ""
             sql = f"""
@@ -580,16 +460,16 @@ class QueryParser:
                     sd.status AS sale_status
                 FROM title t
                 LEFT JOIN media_rights mr ON t.title_id = mr.title_id
-                  AND UPPER(mr.region) = '{regions[0]}'
+                  AND {rw_mr}
                 LEFT JOIN sales_deal sd ON t.title_id = sd.title_id
-                  AND UPPER(sd.region) = '{regions[0]}'
+                  AND {rw_sales}
                 WHERE {rw_t} {title_f}
                 ORDER BY mr.term_to ASC
                 LIMIT 150
             """
             return sql.strip(), None, 'table', region_ctx
         
-        # ── 1. Do-Not-Air ──────────────────────────────────────────────────
+        # ── 1. Do-Not-Air ────────────────────────────────────────────────────
         if any(kw in q for kw in DNA_KW):
             title_filter = f" AND {_title_like(title_hint,'dna.title_name')}" if title_hint else ""
             sql = f"""
@@ -605,7 +485,7 @@ class QueryParser:
             """
             return sql.strip(), None, 'table', region_ctx
         
-        # ── 2. MOVIES / FILMS ──────────────────────────────────────────────
+        # ── 2. MOVIES / FILMS ────────────────────────────────────────────────
         if _is_movie_query(q):
             cat_f_m = _movie_cat_filter(q, "m")
             cat_f_t = _movie_cat_filter(q, "t")
@@ -619,7 +499,7 @@ class QueryParser:
                     FROM movie m
                     LEFT JOIN title t ON t.movie_id = m.movie_id
                     LEFT JOIN media_rights mr ON mr.title_id = t.title_id
-                      AND UPPER(mr.region) = '{regions[0]}'
+                      AND {rw_mr}
                     GROUP BY franchise_name
                     ORDER BY total_box_office_usd_m DESC
                 """
@@ -634,7 +514,7 @@ class QueryParser:
                     FROM movie m
                     LEFT JOIN title t ON t.movie_id = m.movie_id
                     LEFT JOIN media_rights mr ON mr.title_id = t.title_id
-                      AND UPPER(mr.region) = '{regions[0]}' AND mr.status = 'Active'
+                      AND {rw_mr} AND mr.status = 'Active'
                     WHERE 1=1 {cat_f_m}
                     GROUP BY m.movie_id
                     ORDER BY m.box_office_gross_usd_m DESC
@@ -655,7 +535,7 @@ class QueryParser:
                     FROM movie m
                     JOIN title t ON t.movie_id = m.movie_id
                     JOIN media_rights mr ON mr.title_id = t.title_id
-                    WHERE UPPER(mr.region) = '{regions[0]}'
+                    WHERE {rw_mr}
                       AND mr.status = 'Active'
                       {cat_f_t} {title_f} {plat_f}
                     ORDER BY m.box_office_gross_usd_m DESC, mr.term_to ASC
@@ -678,7 +558,7 @@ class QueryParser:
                     FROM movie m
                     JOIN title t ON t.movie_id = m.movie_id
                     JOIN media_rights mr ON mr.title_id = t.title_id
-                    WHERE UPPER(mr.region) = '{regions[0]}'
+                    WHERE {rw_mr}
                       AND mr.status = 'Active'
                       AND mr.term_to <= DATE('now','+{days} days')
                       AND mr.term_to >= DATE('now')
@@ -698,7 +578,7 @@ class QueryParser:
                     FROM movie m
                     LEFT JOIN title t ON t.movie_id = m.movie_id
                     LEFT JOIN media_rights mr ON mr.title_id = t.title_id
-                      AND UPPER(mr.region) = '{regions[0]}'
+                      AND {rw_mr}
                     WHERE 1=1 {cat_f_m}
                     GROUP BY {group_col}
                     ORDER BY films DESC
@@ -716,7 +596,7 @@ class QueryParser:
                     FROM movie m
                     JOIN title t ON t.movie_id = m.movie_id
                     JOIN media_rights mr ON mr.title_id = t.title_id
-                    WHERE UPPER(mr.region) = '{regions[0]}'
+                    WHERE {rw_mr}
                       AND LOWER(m.movie_title) LIKE '%{title_hint.lower().split(":")[0].strip()}%'
                     ORDER BY mr.term_to ASC
                     LIMIT 100
@@ -734,14 +614,14 @@ class QueryParser:
                 FROM movie m
                 LEFT JOIN title t ON t.movie_id = m.movie_id
                 LEFT JOIN media_rights mr ON mr.title_id = t.title_id
-                  AND UPPER(mr.region) = '{regions[0]}'
+                  AND {rw_mr}
                 WHERE 1=1 {cat_f_m}
                 GROUP BY m.movie_id
                 ORDER BY m.box_office_gross_usd_m DESC
             """
             return sql.strip(), None, 'table', region_ctx
         
-        # ── 3. Elemental rights ────────────────────────────────────────────
+        # ── 3. Elemental rights ───────────────────────────────────────────────
         if any(kw in q for kw in ELEMENTAL_KW) and any(kw in q for kw in ["right", "deal"]):
             title_filter = f" AND {_title_like(title_hint,'er.title_name')}" if title_hint else ""
             sql = f"""
@@ -757,7 +637,7 @@ class QueryParser:
             """
             return sql.strip(), None, 'table', region_ctx
         
-        # ── 4. Sales deals / Rights-Out ────────────────────────────────────
+        # ── 4. Sales deals / Rights-Out ──────────────────────────────────────
         if any(kw in q for kw in SALES_KW):
             if any(kw in q for kw in ["breakdown", "by buyer", "platform", "by platform"]):
                 sql = f"""
@@ -783,7 +663,7 @@ class QueryParser:
             """
             return sql.strip(), None, 'table', region_ctx
         
-        # ── 5. Rights expiry alerts ────────────────────────────────────────
+        # ── 5. Rights expiry alerts ───────────────────────────────────────────
         if any(kw in q for kw in EXPIRY_KW):
             days = 90
             for d in re.findall(r'\b(\d+)\s*day', q):
@@ -809,7 +689,7 @@ class QueryParser:
             """
             return sql.strip(), None, 'bar', region_ctx
         
-        # ── 6. Specific title — full rights detail ─────────────────────────
+        # ── 6. Specific title — full rights detail ────────────────────────────
         if title_hint and any(kw in q for kw in list(RIGHTS_KW) + ["deal"]):
             plat_f = f"AND {plat_mr}" if platforms else ""
             sql = f"""
@@ -830,7 +710,7 @@ class QueryParser:
             """
             return sql.strip(), None, 'table', region_ctx
         
-        # ── 7. Rights by count / platform ──────────────────────────────────
+        # ── 7. Rights by count / platform ────────────────────────────────────
         if any(kw in q for kw in RIGHTS_KW) and any(kw in q for kw in ["count", "how many", "total"]):
             plat_f = f"AND {plat_mr}" if platforms else ""
             sql = f"""
@@ -845,7 +725,7 @@ class QueryParser:
             """
             return sql.strip(), None, 'bar', region_ctx
         
-        # ── 8. Rights by season hierarchy ──────────────────────────────────
+        # ── 8. Rights by season hierarchy ────────────────────────────────────
         if any(kw in q for kw in RIGHTS_KW) and any(kw in q for kw in ["season", "hierarchy", "by season"]):
             sql = f"""
                 SELECT s.series_title, se.season_number,
@@ -858,14 +738,14 @@ class QueryParser:
                 JOIN season se ON s.series_id = se.series_id
                 JOIN title t ON se.season_id = t.season_id
                 LEFT JOIN media_rights mr ON t.title_id = mr.title_id
-                  AND UPPER(mr.region) = '{regions[0]}'
+                  AND {rw_mr}
                 GROUP BY s.series_title, se.season_number
                 ORDER BY s.series_title, se.season_number
                 LIMIT 100
             """
             return sql.strip(), None, 'table', region_ctx
         
-        # ── 9. Exhibition restrictions ─────────────────────────────────────
+        # ── 9. Exhibition restrictions ────────────────────────────────────────
         if "exhibition" in q and "restrict" in q:
             sql = f"""
                 SELECT mr.title_name, er.max_plays, er.max_plays_per_day,
@@ -879,7 +759,7 @@ class QueryParser:
             """
             return sql.strip(), None, 'table', region_ctx
         
-        # ── 10. Rights breakdown / analytics ───────────────────────────────
+        # ── 10. Rights breakdown / analytics ─────────────────────────────────
         if any(kw in q for kw in ["breakdown", "distribution", "mix", "analytics", "by territory", "by platform", "by deal"]):
             if "territory" in q or "territories" in q:
                 sql = f"""
@@ -917,30 +797,32 @@ class QueryParser:
                 """
             return sql.strip(), None, 'bar', region_ctx
         
-        # ── 11. Deals (vendor contracts) ───────────────────────────────────
+        # ── 11. Deals (vendor contracts) ──────────────────────────────────────
+        # FIXED: Now handles multiple regions AND date ranges
         if any(kw in q for kw in DEAL_KW):
-            stat_f = "AND status='Active'" if "active" in q else \
-                     "AND status='Expired'" if "expired" in q else \
-                     "AND (status='Pending' OR status='Under Negotiation')" if "pending" in q else ""
+            stat_f = "AND d.status='Active'" if "active" in q else \
+                     "AND d.status='Expired'" if "expired" in q else \
+                     "AND (d.status='Pending' OR d.status='Under Negotiation')" if "pending" in q else ""
             
             # Combine all WHERE conditions (region + status + date)
             where_parts = [rw_deals]
             if stat_f:
-                where_parts.append(stat_f.strip())
+                where_parts.append(stat_f)
             if date_filter != "1=1":
                 where_parts.append(date_filter)
+            
             where_clause = " AND ".join(where_parts)
             
             if any(kw in q for kw in ["vendor", "by vendor", "breakdown", "by type", "value"]):
-                group_col = "vendor_name" if "vendor" in q else "deal_type"
+                group_col = "d.vendor_name" if "vendor" in q else "d.deal_type"
                 sql = f"""
                     SELECT {group_col},
                            COUNT(*) AS deal_count,
-                           SUM(deal_value) AS total_value,
-                           AVG(deal_value) AS avg_value,
-                           SUM(CASE WHEN status='Active' THEN 1 ELSE 0 END) AS active,
-                           SUM(CASE WHEN payment_status='Overdue' THEN 1 ELSE 0 END) AS overdue
-                    FROM deals
+                           SUM(d.deal_value) AS total_value,
+                           AVG(d.deal_value) AS avg_value,
+                           SUM(CASE WHEN d.status='Active' THEN 1 ELSE 0 END) AS active,
+                           SUM(CASE WHEN d.payment_status='Overdue' THEN 1 ELSE 0 END) AS overdue
+                    FROM deals d
                     WHERE {where_clause}
                     GROUP BY {group_col}
                     ORDER BY total_value DESC
@@ -949,18 +831,19 @@ class QueryParser:
                 return sql.strip(), None, 'bar', region_ctx
             
             sql = f"""
-                SELECT deal_id, deal_name, vendor_name, deal_type,
-                       deal_value, rights_scope, territory,
-                       deal_date, expiry_date, status, payment_status,
-                       CAST(JULIANDAY(expiry_date)-JULIANDAY('now') AS INTEGER) AS days_to_expiry
-                FROM deals
+                SELECT d.deal_id, d.deal_name, d.vendor_name, d.deal_type,
+                       d.deal_value, d.rights_scope, d.territory,
+                       d.deal_date, d.expiry_date, d.status, d.payment_status,
+                       d.region,
+                       CAST(JULIANDAY(d.expiry_date)-JULIANDAY('now') AS INTEGER) AS days_to_expiry
+                FROM deals d
                 WHERE {where_clause}
-                ORDER BY deal_value DESC
+                ORDER BY d.deal_value DESC
                 LIMIT 200
             """
             return sql.strip(), None, 'table', region_ctx
         
-        # ── 12. Work orders / operational ──────────────────────────────────
+        # ── 12. Work orders / operational ────────────────────────────────────
         if any(kw in q for kw in WORK_KW):
             if "quality" in q or "vendor" in q:
                 sql = f"""
@@ -984,7 +867,7 @@ class QueryParser:
             """
             return sql.strip(), None, 'pie', region_ctx
         
-        # ── 13. Title catalog ──────────────────────────────────────────────
+        # ── 13. Title catalog ─────────────────────────────────────────────────
         if any(kw in q for kw in TITLE_KW):
             title_f = f"WHERE {rw_t}" + (
                 f" AND {_title_like(title_hint,'t.title_name')}" if title_hint else "")
@@ -1012,7 +895,7 @@ class QueryParser:
             """
             return sql.strip(), None, 'table', region_ctx
         
-        # ── 14. Generic fallback ───────────────────────────────────────────
+        # ── 14. Generic fallback ──────────────────────────────────────────────
         stat_f = "AND mr.status='Active'" if "active" in q else \
                  "AND mr.status='Expired'" if "expired" in q else ""
         plat_f = f"AND {plat_mr}" if platforms else ""
