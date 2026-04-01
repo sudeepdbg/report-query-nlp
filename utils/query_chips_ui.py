@@ -321,7 +321,7 @@ def render_chips(
 
 def _rebuild_chips(intent: QueryIntent) -> list[dict]:
     """Re-import chip builder to avoid circular — inline minimal version."""
-    from query_pipeline import _build_chips
+    from utils.query_pipeline import _build_chips
     return _build_chips(intent)
 
 
