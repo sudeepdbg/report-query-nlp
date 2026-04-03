@@ -47,6 +47,55 @@ BUG 8  Multi-region + deals: rw_deals uses IN clause but date_filter appends
 BUG 9  Dashboard chart routing: 'table' chart_type with a date column triggers
         line chart with wrong axis. render_dynamic_dashboard fix (separate file)
         is also included as inline comment guidance.
+# ── Dataclasses expected by query_pipeline & query_chips_ui ──────────────────
+from dataclasses import dataclass, field
+from typing import Optional, List, Any
+
+@dataclass
+class DateFilter:
+    kind: str            # "last_days" | "last_months" | "year" | "range"
+    value: Any           # int for last_days/last_months/year; tuple for range
+    label: str           # human-readable, e.g. "Last 30 Days"
+    col: str = "deal_date"
+
+@dataclass
+class QueryIntent:
+    raw: str
+    regions: List[str]           = field(default_factory=list)
+    platforms: List[str]         = field(default_factory=list)
+    title_hints: List[str]       = field(default_factory=list)
+    date_filter: Optional[DateFilter] = None
+    is_movie: bool               = False
+    cross_intent: Optional[str]  = None
+    sql: str                     = ""
+    chart_type: str              = ""
+    summary: str                 = ""
+
+
+def preprocess(question: str) -> str:
+    """Lightweight text normalisation before parsing."""
+    return _apply_ontology(question.strip())
+
+
+def generate(intent: QueryIntent):
+    """Stage-2: turn a QueryIntent into (sql, db_path, chart_type)."""
+    result = QueryParser.generate_sql(intent.raw, intent.regions[0] if intent.regions else "NA")
+    sql       = result.get("sql", "")
+    db_path   = result.get("db_path")
+    chart_type = result.get("chart_type", "table")
+    intent.sql        = sql
+    intent.chart_type = chart_type
+    return sql, db_path, chart_type
+
+
+def validate(intent: QueryIntent) -> List[str]:
+    """Return a list of validation warning strings (empty = OK)."""
+    warnings = []
+    if not intent.sql:
+        warnings.append("No SQL was generated for this query.")
+    return warnings
+
+        
 """
 import re
 from typing import Tuple, Optional, List
