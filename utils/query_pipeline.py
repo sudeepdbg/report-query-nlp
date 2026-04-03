@@ -188,38 +188,39 @@ def render_chips(
                 if c1.button("✓", key=f"{key_prefix}_apply_title",
                              help="Apply title filter"):
                     new_intent = copy.deepcopy(intent)
-                    new_intent.title_hint = new_title.strip() or None
-                    new_intent.chips      = _rebuild_chips(new_intent)
-                    changed_intent        = new_intent
+                    new_intent.title_hints = [new_title] if new_title else []
+                    new_intent.chips       = _rebuild_chips(new_intent)
+                    changed_intent         = new_intent
                 if c2.button("✕", key=f"{key_prefix}_rm_title",
                              help="Remove title filter"):
                     new_intent = copy.deepcopy(intent)
-                    new_intent.title_hint = None
-                    new_intent.chips      = _rebuild_chips(new_intent)
-                    changed_intent        = new_intent
+                    new_intent.title_hints = []
+                    new_intent.chips       = _rebuild_chips(new_intent)
+                    changed_intent         = new_intent
 
-            # ── DATE chip: editable ───────────────────────────────────────
+            # ── DATE chip: editable preset ────────────────────────────────
             elif kind == "date":
                 st.markdown(
                     '<div style="font-size:.62rem;font-weight:700;color:#92400e;'
                     'text-transform:uppercase;letter-spacing:.06em">Date Range</div>',
                     unsafe_allow_html=True)
-                # Offer common presets
-                preset = st.selectbox(
-                    "Date preset",
-                    ["Last 30 Days","Last 60 Days","Last 90 Days","Last 120 Days",
-                     "Last 6 Months","Last 12 Months","Year 2025","Year 2024",
-                     chip["value"]],
-                    index=8,   # default = current value
-                    key=f"{key_prefix}_date_preset",
+                presets = [
+                    "Last 7 Days","Last 14 Days","Last 30 Days",
+                    "Last 3 Months","Last 6 Months","Last 12 Months",
+                    "Year 2023","Year 2024","Year 2025",
+                ]
+                cur_label = intent.date_filter.label if intent.date_filter else presets[2]
+                new_preset = st.selectbox(
+                    "Date", presets,
+                    index=presets.index(cur_label) if cur_label in presets else 2,
+                    key=f"{key_prefix}_date_sel",
                     label_visibility="collapsed",
                 )
                 c1, c2 = st.columns(2)
                 if c1.button("✓", key=f"{key_prefix}_apply_date",
-                             help="Apply date preset"):
-                    new_df = _parse_date_preset(preset)
+                             help="Apply date filter"):
                     new_intent = copy.deepcopy(intent)
-                    new_intent.date_filter = new_df
+                    new_intent.date_filter = _parse_date_preset(new_preset)
                     new_intent.chips       = _rebuild_chips(new_intent)
                     changed_intent         = new_intent
                 if c2.button("✕", key=f"{key_prefix}_rm_date",
@@ -346,6 +347,27 @@ def _parse_date_preset(label: str) -> Optional[DateFilter]:
     return None
 
 
+# ── Stage-1: parse raw question into a QueryIntent ────────────────────────────
+
+def parse_query(question: str, selected_region: str = "NA") -> QueryIntent:
+    """Stage-1: parse raw question into a QueryIntent."""
+    from utils.query_parser import QueryParser, preprocess
+    clean = preprocess(question)
+    result = QueryParser.generate_sql(clean, selected_region)
+    return QueryIntent(
+        raw=question,
+        regions=[selected_region],
+        platforms=result.get("platforms", []),
+        title_hints=result.get("title_hints", []),
+        date_filter=None,
+        is_movie=result.get("is_movie", False),
+        cross_intent=result.get("cross_intent"),
+        sql=result.get("sql", ""),
+        chart_type=result.get("chart_type", "table"),
+        summary=result.get("summary", ""),
+    )
+
+
 # ── Convenience wrapper used by page_chat & page_custom_dashboard ─────────────
 
 def chips_query_block(
@@ -376,37 +398,16 @@ def chips_query_block(
         intent = stored_intent
     else:
         # Fresh parse
-        sql, err, chart_type, region_ctx, intent = parse_query(question, selected_region)
-        if err:
-            return sql, err, chart_type, region_ctx, intent
+        intent = parse_query(question, selected_region)
 
     # Render chips (may mutate session state + rerun)
     render_chips(intent, key_prefix=key_prefix, on_change_rerun=True)
 
-  # Re-generate SQL from (possibly chip-edited) intent
-sql, gen_err, chart_type = generate(intent)
-sql, val_err = validate(sql, intent)
-err = gen_err or val_err
-region_ctx = " vs ".join(intent.regions) if len(intent.regions) > 1 else intent.regions[0]
-
-
-def parse_query(question: str, selected_region: str = "NA") -> QueryIntent:
-    """Stage-1: parse raw question into a QueryIntent."""
-    from utils.query_parser import QueryParser, preprocess
-    clean = preprocess(question)
-    result = QueryParser.generate_sql(clean, selected_region)
-    return QueryIntent(
-        raw=question,
-        regions=[selected_region],
-        platforms=result.get("platforms", []),
-        title_hints=result.get("title_hints", []),
-        date_filter=None,
-        is_movie=result.get("is_movie", False),
-        cross_intent=result.get("cross_intent"),
-        sql=result.get("sql", ""),
-        chart_type=result.get("chart_type", "table"),
-        summary=result.get("summary", ""),
-    )
+    # Re-generate SQL from (possibly chip-edited) intent
+    sql, gen_err, chart_type = generate(intent)
+    sql, val_err = validate(sql, intent)
+    err = gen_err or val_err
+    region_ctx = " vs ".join(intent.regions) if len(intent.regions) > 1 else intent.regions[0]
 
     if show_sql and sql:
         import html
