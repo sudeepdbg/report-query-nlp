@@ -383,20 +383,18 @@ def chips_query_block(
     # Render chips (may mutate session state + rerun)
     render_chips(intent, key_prefix=key_prefix, on_change_rerun=True)
 
-    # Re-generate SQL from (possibly chip-edited) intent
-    sql, gen_err, chart_type = generate(intent)
-    sql, val_err = validate(sql, intent)
-    err = gen_err or val_err
+  # Re-generate SQL from (possibly chip-edited) intent
+sql, gen_err, chart_type = generate(intent)
+sql, val_err = validate(sql, intent)
+err = gen_err or val_err
+region_ctx = " vs ".join(intent.regions) if len(intent.regions) > 1 else intent.regions[0]
 
-    region_ctx = " vs ".join(intent.regions) if len(intent.regions) > 1 else intent.regions[0]
 
-    def parse_query(question: str, selected_region: str = "NA") -> QueryIntent:
+def parse_query(question: str, selected_region: str = "NA") -> QueryIntent:
     """Stage-1: parse raw question into a QueryIntent."""
     from utils.query_parser import QueryParser, preprocess
-
     clean = preprocess(question)
     result = QueryParser.generate_sql(clean, selected_region)
-
     return QueryIntent(
         raw=question,
         regions=[selected_region],
