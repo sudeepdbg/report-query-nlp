@@ -21,7 +21,7 @@ import copy
 import streamlit as st
 from typing import Optional
 
-from utils.query_parser_utils import (
+from utils.query_parser import (
     QueryIntent, DateFilter,
     preprocess, generate, validate,
     REGION_CANONICAL, ALL_MEDIA,
