@@ -390,6 +390,29 @@ def chips_query_block(
 
     region_ctx = " vs ".join(intent.regions) if len(intent.regions) > 1 else intent.regions[0]
 
+    def parse_query(question: str, selected_region: str = "NA") -> QueryIntent:
+    """
+    Stage-1: parse raw question into a QueryIntent.
+    Wraps QueryParser.generate_sql from query_parser.
+    """
+    from utils.query_parser import QueryParser, preprocess
+
+    clean = preprocess(question)
+    result = QueryParser.generate_sql(clean, selected_region)
+
+    return QueryIntent(
+        raw=question,
+        regions=[selected_region],
+        platforms=result.get("platforms", []),
+        title_hints=result.get("title_hints", []),
+        date_filter=None,
+        is_movie=result.get("is_movie", False),
+        cross_intent=result.get("cross_intent"),
+        sql=result.get("sql", ""),
+        chart_type=result.get("chart_type", "table"),
+        summary=result.get("summary", ""),
+    )
+
     if show_sql and sql:
         import html
         st.markdown(
