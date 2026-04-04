@@ -1,12 +1,13 @@
 """
-Foundry Vantage — Rights Explorer  v5.0
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Pages  : Rights Explorer · Title Catalog · Do-Not-Air · Sales · Deals
-Vendors · Work Orders · Gap Analysis · Compare · Alerts
-Title 360 · Chat / Query · Custom Dashboard
-Pipeline: 3-stage NL→SQL (query_pipeline.py)
+Foundry Vantage - Rights Explorer  v5.0
+...
 UX     : Interactive SQL chips (query_chips_ui.py)
-"""
+"""                                    # ← Line 9: Closing """ on its own line
+                                       # ← Line 10: Empty line (optional)
+import streamlit as st                 # ← Line 11: Imports start here
+import pandas as pd
+import plotly.express as px            # ← NO trailing """ here!
+import plotly.graph_objects as go
 import streamlit as st
 import pandas as pd
 import plotly.express as px
