@@ -21,8 +21,8 @@ from utils.database import (
     save_alert, dismiss_alert, get_alerts,
 )
 # ── New pipeline imports (replace old query_parser) ───────────────────────────
-from query_pipeline import parse_query, generate, validate
-from query_chips_ui import render_chips, chips_query_block
+from utils.query_pipeline import parse_query, generate, validate
+from utils.query_chips_ui import render_chips, chips_query_block
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
