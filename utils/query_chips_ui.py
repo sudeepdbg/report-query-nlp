@@ -4,6 +4,8 @@ Renders parsed QueryIntent as interactive editable chips/facets.
 Users can remove a chip or edit a value → query reruns automatically.
 """
 from __future__ import annotations
+# Add this line to the imports in query_chips_ui.py
+from query_pipeline import parse_query
 import copy
 import streamlit as st
 from typing import Optional
