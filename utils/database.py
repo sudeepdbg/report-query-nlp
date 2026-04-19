@@ -278,6 +278,38 @@ CREATE TABLE IF NOT EXISTS alerts (
     created_at  TEXT DEFAULT (DATETIME('now')),
     dismissed   INTEGER DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS query_log (
+    log_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp       TEXT    DEFAULT (DATETIME('now')),
+    session_id      TEXT    NOT NULL,
+    user_id         TEXT,
+    region          TEXT,
+    persona         TEXT,
+    question        TEXT,
+    generated_sql   TEXT,
+    intent_domain   TEXT,
+    cross_intent    INTEGER DEFAULT 0,
+    latency_ms      REAL,
+    success         INTEGER DEFAULT 1,
+    error_message   TEXT,
+    rows_returned   INTEGER DEFAULT 0,
+    chart_type      TEXT
+);
+CREATE TABLE IF NOT EXISTS feedback (
+    feedback_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    log_id          INTEGER REFERENCES query_log(log_id),
+    feedback_type   TEXT    NOT NULL,
+    timestamp       TEXT    DEFAULT (DATETIME('now')),
+    comment         TEXT
+);
+CREATE TABLE IF NOT EXISTS user_session (
+    session_id      TEXT    PRIMARY KEY,
+    start_time      TEXT    DEFAULT (DATETIME('now')),
+    last_active     TEXT    DEFAULT (DATETIME('now')),
+    user_id         TEXT,
+    region          TEXT,
+    persona         TEXT
+);
 """
 
 INDEXES_SQL = [
@@ -302,6 +334,10 @@ INDEXES_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_movie_cat     ON movie(content_category)",
     "CREATE INDEX IF NOT EXISTS idx_movie_genre   ON movie(genre)",
     "CREATE INDEX IF NOT EXISTS idx_alerts_region  ON alerts(region)",
+    "CREATE INDEX IF NOT EXISTS idx_ql_session    ON query_log(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_ql_timestamp  ON query_log(timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_ql_success    ON query_log(success)",
+    "CREATE INDEX IF NOT EXISTS idx_fb_log        ON feedback(log_id)",
 ]
 
 # ─── Seed helpers ─────────────────────────────────────────────────────────────
@@ -793,6 +829,96 @@ def get_table_stats(conn) -> dict:
         except:
             stats[t] = 0
     return stats
+
+
+# ─── Analytics logging helpers ────────────────────────────────────────────────
+
+def log_query(
+    conn,
+    session_id: str,
+    user_id: Optional[str],
+    region: str,
+    persona: str,
+    question: str,
+    generated_sql: str,
+    intent_domain: str,
+    cross_intent: bool,
+    latency_ms: float,
+    success: bool,
+    error_message: str,
+    rows_returned: int,
+    chart_type: str,
+) -> Optional[int]:
+    """Insert a query_log row and return the new log_id."""
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO query_log
+               (session_id, user_id, region, persona, question, generated_sql,
+                intent_domain, cross_intent, latency_ms, success,
+                error_message, rows_returned, chart_type)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                session_id, user_id, region, persona,
+                question, generated_sql, intent_domain,
+                1 if cross_intent else 0,
+                latency_ms,
+                1 if success else 0,
+                error_message or "",
+                rows_returned,
+                chart_type or "",
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid
+    except Exception as e:
+        logger.error(f"log_query failed: {e}")
+        return None
+
+
+def log_feedback(
+    conn,
+    log_id: int,
+    feedback_type: str,
+    comment: Optional[str] = None,
+) -> bool:
+    """Insert a feedback row ('thumbs_up' | 'thumbs_down') for the given log_id."""
+    try:
+        conn.cursor().execute(
+            "INSERT INTO feedback (log_id, feedback_type, comment) VALUES (?,?,?)",
+            (log_id, feedback_type, comment),
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"log_feedback failed: {e}")
+        return False
+
+
+def update_session(
+    conn,
+    session_id: str,
+    user_id: Optional[str] = None,
+    region: Optional[str] = None,
+    persona: Optional[str] = None,
+) -> bool:
+    """Upsert a user_session row — INSERT or UPDATE last_active + optional fields."""
+    try:
+        conn.cursor().execute(
+            """INSERT INTO user_session (session_id, user_id, region, persona)
+               VALUES (?,?,?,?)
+               ON CONFLICT(session_id) DO UPDATE SET
+                   last_active = DATETIME('now'),
+                   user_id  = COALESCE(excluded.user_id,  user_session.user_id),
+                   region   = COALESCE(excluded.region,   user_session.region),
+                   persona  = COALESCE(excluded.persona,  user_session.persona)""",
+            (session_id, user_id, region, persona),
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"update_session failed: {e}")
+        return False
 
 
 class DatabaseManager:
