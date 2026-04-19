@@ -13,7 +13,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import time
+import uuid
 import html
+import numpy as np
 from datetime import datetime
 import logging
 from typing import Optional
@@ -21,6 +23,7 @@ from typing import Optional
 from utils.database import (
     init_database, execute_sql, get_table_stats,
     save_alert, dismiss_alert, get_alerts,
+    log_query, log_feedback, update_session,
 )
 # ── New pipeline imports (replace old query_parser) ───────────────────────────
 from utils.query_pipeline import parse_query, generate, validate
@@ -185,15 +188,27 @@ _SS_DEFAULTS = {
     "dashboard_pins":   [],
     "dashboard_last_df":   None,
     "dashboard_last_meta": {},
+    "session_id":       None,
 }
 for _k, _v in _SS_DEFAULTS.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
+# Ensure session_id is always a real UUID (handles None default above)
+if not st.session_state.session_id:
+    st.session_state.session_id = str(uuid.uuid4())
+
 try:
     DB_CONN = init_db()
     if not st.session_state.db_stats:
         st.session_state.db_stats = get_table_stats(DB_CONN)
+    # Bootstrap analytics session (upsert — safe to call every page load)
+    update_session(
+        DB_CONN,
+        session_id = st.session_state.session_id,
+        region     = st.session_state.current_region,
+        persona    = st.session_state.persona,
+    )
 except Exception as e:
     st.error(f"⚠️ {e}"); st.stop()
 
@@ -214,6 +229,7 @@ PAGES = [
     ("title_360",    "🎯", "Title 360"),
     ("chat",         "💬", "Chat / Query"),
     ("dashboard",    "📐", "Custom Dashboard"),
+    ("analytics",    "📊", "Analytics"),
 ]
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -223,6 +239,37 @@ def run(sql: str) -> pd.DataFrame:
     df, err = execute_sql(sql, DB_CONN)
     if err: st.error(f"SQL error: {err}")
     return df if df is not None else pd.DataFrame()
+
+def run_with_logging(
+    sql: str,
+    question: str,
+    intent: str,
+    chart_type: str,
+    region_ctx: str,
+    cross_intent: bool = False,
+) -> tuple:
+    """Wraps execute_sql with latency measurement + query_log insertion.
+    Returns (df, db_err, log_id)."""
+    t0 = time.time()
+    df, db_err = execute_sql(sql, DB_CONN)
+    latency_ms = (time.time() - t0) * 1000
+    log_id = log_query(
+        conn          = DB_CONN,
+        session_id    = st.session_state.get("session_id", "unknown"),
+        user_id       = st.session_state.get("user_id", None),
+        region        = region_ctx or st.session_state.get("current_region", "NA"),
+        persona       = st.session_state.get("persona", "General"),
+        question      = question,
+        generated_sql = sql,
+        intent_domain = intent or "",
+        cross_intent  = cross_intent,
+        latency_ms    = latency_ms,
+        success       = db_err is None,
+        error_message = db_err or "",
+        rows_returned = len(df) if df is not None else 0,
+        chart_type    = chart_type or "",
+    )
+    return df, db_err, log_id
 
 def fmt_m(x) -> str:
     try:
@@ -824,6 +871,25 @@ def page_chat():
             if msg.get("data") is not None and not msg["data"].empty:
                 st.dataframe(msg["data"], use_container_width=True, hide_index=True, height=280)
                 st.download_button("📥 CSV", msg["data"].to_csv(index=False), f"query_{i}.csv","text/csv",key=f"dl_h_{i}")
+            # ── Feedback buttons for history entries ──────────────────────────
+            msg_log_id = msg.get("log_id")
+            if msg_log_id:
+                fb_key = f"fb_{msg_log_id}"
+                if fb_key not in st.session_state:
+                    hfc1, hfc2, _ = st.columns([1, 1, 8])
+                    with hfc1:
+                        if st.button("👍", key=f"up_h_{i}_{msg_log_id}", help="Good answer"):
+                            log_feedback(DB_CONN, msg_log_id, "thumbs_up")
+                            st.session_state[fb_key] = "thumbs_up"
+                            st.rerun()
+                    with hfc2:
+                        if st.button("👎", key=f"dn_h_{i}_{msg_log_id}", help="Bad answer"):
+                            log_feedback(DB_CONN, msg_log_id, "thumbs_down")
+                            st.session_state[fb_key] = "thumbs_down"
+                            st.rerun()
+                else:
+                    icon = "👍" if st.session_state[fb_key] == "thumbs_up" else "👎"
+                    st.caption(f"Feedback recorded {icon}")
 
     # ── Live input ────────────────────────────────────────────────────────────
     user_input = st.chat_input(f"Ask about rights, titles, expiry, DNA… [{reg}]")
@@ -851,7 +917,11 @@ def page_chat():
                 if error:
                     st.error(f"❌ {error}")
                 else:
-                    res_df, db_err = execute_sql(sql, DB_CONN)
+                    res_df, db_err, log_id = run_with_logging(
+                        sql, active_prompt,
+                        intent.domain if hasattr(intent, "domain") else str(intent),
+                        chart_type, region_ctx,
+                    )
                     if db_err:
                         st.error(f"DB error: {db_err}")
                     elif res_df is not None and not res_df.empty:
@@ -887,11 +957,28 @@ def page_chat():
                         st.dataframe(res_df, use_container_width=True, hide_index=True, height=300)
                         st.download_button("📥 Download CSV", res_df.to_csv(index=False), f"rights_query_{region_ctx}.csv","text/csv",key="dl_live")
 
+                        # ── Feedback buttons ──────────────────────────────────
+                        if log_id:
+                            fb_key = f"fb_{log_id}"
+                            if fb_key not in st.session_state:
+                                fc1, fc2, _ = st.columns([1, 1, 8])
+                                with fc1:
+                                    if st.button("👍", key=f"up_live_{log_id}", help="Good answer"):
+                                        log_feedback(DB_CONN, log_id, "thumbs_up")
+                                        st.session_state[fb_key] = "thumbs_up"
+                                        st.rerun()
+                                with fc2:
+                                    if st.button("👎", key=f"dn_live_{log_id}", help="Bad answer"):
+                                        log_feedback(DB_CONN, log_id, "thumbs_down")
+                                        st.session_state[fb_key] = "thumbs_down"
+                                        st.rerun()
+
                         st.session_state.chat_history.append({
                             "question": active_prompt, "answer": answer_txt,
                             "data": res_df.copy(), "chart": fig,
                             "metrics": metrics_data, "sql": sql,
                             "region": region_ctx, "chips": intent.chips,
+                            "log_id": log_id,
                         })
                     else:
                         st.warning("No records returned — try removing a chip filter or rewording your query.")
@@ -1429,7 +1516,11 @@ def page_custom_dashboard():
         elif not sql:
             st.warning("Could not generate SQL."); _db_suggested_queries("fail")
         else:
-            res_df, db_err = execute_sql(sql, DB_CONN)
+            res_df, db_err, _log_id = run_with_logging(
+                sql, query_text.strip(),
+                intent or "",
+                chart_type, region_ctx,
+            )
             if db_err:
                 st.error(f"❌ Database error: {db_err}")
             elif res_df is None or res_df.empty:
@@ -1493,6 +1584,396 @@ def page_custom_dashboard():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ANALYTICS
+# ══════════════════════════════════════════════════════════════════════════════
+def page_analytics():
+    st.markdown('<div class="page-header">📊 Analytics</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-sub">System health · performance · quality · adoption · KPI tracker</div>', unsafe_allow_html=True)
+
+    tabs = st.tabs(["Overview", "Performance", "Quality", "Adoption", "KPI Tracker"])
+
+    # ── Safe SQL helper (read directly from DB_CONN, bypass execute_sql guard) ─
+    def _sql(query: str) -> pd.DataFrame:
+        try:
+            return pd.read_sql_query(query, DB_CONN)
+        except Exception:
+            return pd.DataFrame()
+
+    today     = pd.Timestamp.now().normalize()
+    d7_start  = (today - pd.Timedelta(days=6)).strftime("%Y-%m-%d")
+    d14_start = (today - pd.Timedelta(days=13)).strftime("%Y-%m-%d")
+    d30_start = (today - pd.Timedelta(days=29)).strftime("%Y-%m-%d")
+    d10_start = (today - pd.Timedelta(days=9)).strftime("%Y-%m-%d")
+
+    # ── Pre-fetch shared datasets ─────────────────────────────────────────────
+    df_7d = _sql(f"""
+        SELECT log_id, timestamp, session_id, success, error_message,
+               latency_ms, intent_domain, rows_returned, chart_type
+        FROM query_log
+        WHERE DATE(timestamp) >= '{d7_start}'
+    """)
+    df_14d = _sql(f"""
+        SELECT DATE(timestamp) AS day, success, error_message
+        FROM query_log
+        WHERE DATE(timestamp) >= '{d14_start}'
+    """)
+    df_fb30 = _sql(f"""
+        SELECT feedback_type, COUNT(*) AS cnt
+        FROM feedback
+        WHERE DATE(timestamp) >= '{d30_start}'
+        GROUP BY feedback_type
+    """)
+
+    # ── Compute headline KPIs ─────────────────────────────────────────────────
+    total_q   = len(df_7d)
+    latencies = df_7d["latency_ms"].dropna().values if not df_7d.empty else np.array([])
+    p95_s     = float(np.percentile(latencies, 95)) / 1000 if len(latencies) else 0.0
+    p50_s     = float(np.percentile(latencies, 50)) / 1000 if len(latencies) else 0.0
+    p99_s     = float(np.percentile(latencies, 99)) / 1000 if len(latencies) else 0.0
+    success_r = (int(df_7d["success"].sum()) / total_q * 100) if total_q else 0.0
+
+    if total_q and not df_7d.empty:
+        succ_df = df_7d[df_7d["success"] == 1]
+        intent_match = (
+            (succ_df["intent_domain"].fillna("") != "").sum() / len(succ_df) * 100
+            if len(succ_df) else 100.0
+        )
+    else:
+        intent_match = 0.0
+
+    wau  = int(df_7d["session_id"].nunique()) if not df_7d.empty else 0
+    ups  = int(df_fb30[df_fb30["feedback_type"] == "thumbs_up"]["cnt"].sum())  if not df_fb30.empty else 0
+    downs= int(df_fb30[df_fb30["feedback_type"] == "thumbs_down"]["cnt"].sum()) if not df_fb30.empty else 0
+    total_fb   = ups + downs
+    thumbs_pct = ups / total_fb * 100 if total_fb else 0.0
+    ratio_str  = f"{ups/downs:.1f}× upvotes/downvotes" if downs else "No downvotes yet"
+
+    # ── Prior-week deltas ─────────────────────────────────────────────────────
+    df_prev = _sql(f"""
+        SELECT log_id, session_id, success
+        FROM query_log
+        WHERE DATE(timestamp) >= '{(today - pd.Timedelta(days=13)).strftime('%Y-%m-%d')}'
+          AND DATE(timestamp) <  '{d7_start}'
+    """)
+    prev_total = len(df_prev)
+    prev_wau   = int(df_prev["session_id"].nunique()) if not df_prev.empty else 0
+    prev_sr    = float(df_prev["success"].mean() * 100) if not df_prev.empty and len(df_prev) else 0.0
+
+    delta_q_val = total_q - prev_total
+    delta_q     = f"{delta_q_val:+,} vs last week" if prev_total else "—"
+    delta_wau   = f"{wau - prev_wau:+} vs last week" if prev_wau else "—"
+    delta_sr    = f"{success_r - prev_sr:+.0f}pp vs last week" if prev_sr else "—"
+
+    # ── Outcome classifier (reused across tabs) ───────────────────────────────
+    def _classify_outcome(row):
+        if row["success"] == 1:
+            return "Success"
+        em = str(row.get("error_message", "") or "").lower()
+        if any(k in em for k in ("block", "unsupport", "refuse", "not permit", "only select")):
+            return "Refused"
+        return "Failed"
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 0 — OVERVIEW
+    # ══════════════════════════════════════════════════════════════════════════
+    with tabs[0]:
+        st.markdown("#### SYSTEM HEALTH — AT A GLANCE")
+        st.markdown("---")
+
+        r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+        with r1c1:
+            st.metric("Total queries (7d)", f"{total_q:,}", delta_q)
+        with r1c2:
+            p95_label = "🔴 Above target" if p95_s > 10 else "🟢 On target"
+            st.metric("P95 response time (7d)", f"{p95_s:.1f}s", f"Target: <10s  {p95_label}")
+        with r1c3:
+            st.metric("Query success rate (7d)", f"{success_r:.0f}%", delta_sr)
+        with r1c4:
+            st.metric("Intent match rate (7d)", f"{intent_match:.0f}%", "Target: ≥95%")
+
+        r2c1, r2c2, _, __ = st.columns(4)
+        with r2c1:
+            st.metric("Weekly active users", str(wau), delta_wau)
+        with r2c2:
+            st.metric("Thumbs-up ratio (30d)", f"{thumbs_pct:.0f}%", ratio_str)
+
+        st.markdown("---")
+
+        left, right = st.columns([6, 4], gap="large")
+
+        with left:
+            st.markdown("**Queries per day (last 14 days)**")
+            st.caption("Usage volume trend")
+            if not df_14d.empty:
+                daily_cnt = df_14d.groupby("day").size().reset_index(name="queries")
+                fig_daily = px.bar(
+                    daily_cnt, x="day", y="queries",
+                    color_discrete_sequence=["#5B5FC7"],
+                    template="plotly_white",
+                )
+                fig_daily.update_layout(**PT, height=320, xaxis_title="", yaxis_title="")
+                st.plotly_chart(fig_daily, use_container_width=True)
+            else:
+                st.info("No query data yet — run some queries in the Chat page to populate this chart.")
+
+        with right:
+            st.markdown("**Query outcome breakdown**")
+            st.caption("Success vs failed vs refused")
+            if not df_14d.empty:
+                df_14d_out = df_14d.copy()
+                df_14d_out["outcome"] = df_14d_out.apply(_classify_outcome, axis=1)
+                outcome_cnt = df_14d_out["outcome"].value_counts().reset_index()
+                outcome_cnt.columns = ["outcome", "count"]
+                color_map = {"Success": "#2ecc71", "Failed": "#e74c3c", "Refused": "#95a5a6"}
+                fig_pie = px.pie(
+                    outcome_cnt, names="outcome", values="count",
+                    color="outcome", color_discrete_map=color_map,
+                    hole=0.55, template="plotly_white",
+                )
+                fig_pie.update_layout(**PT, height=320, showlegend=True)
+                fig_pie.update_traces(textposition="inside", textinfo="percent")
+                st.plotly_chart(fig_pie, use_container_width=True)
+            else:
+                st.info("No outcome data yet.")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 1 — PERFORMANCE
+    # ══════════════════════════════════════════════════════════════════════════
+    with tabs[1]:
+        st.markdown("#### Performance")
+
+        pc1, pc2, pc3, pc4 = st.columns(4)
+        pc1.metric("P50 latency (7d)", f"{p50_s:.2f}s")
+        pc2.metric("P95 latency (7d)", f"{p95_s:.2f}s",
+                   "🔴 Above target" if p95_s > 10 else "🟢 On target")
+        pc3.metric("P99 latency (7d)", f"{p99_s:.2f}s")
+        pc4.metric("Samples (7d)", f"{len(latencies):,}")
+
+        st.markdown("---")
+        perf_l, perf_r = st.columns(2, gap="large")
+
+        with perf_l:
+            st.markdown("**Latency distribution (ms)**")
+            if len(latencies):
+                fig_hist = px.histogram(
+                    x=latencies, nbins=30,
+                    labels={"x": "Latency (ms)", "y": "Queries"},
+                    color_discrete_sequence=["#7c3aed"],
+                    template="plotly_white",
+                )
+                fig_hist.update_layout(**PT, height=300, xaxis_title="Latency (ms)", yaxis_title="Count")
+                st.plotly_chart(fig_hist, use_container_width=True)
+            else:
+                st.info("No latency data for last 7 days.")
+
+        with perf_r:
+            st.markdown("**Failed queries by reason**")
+            df_fail = df_7d[df_7d["success"] == 0].copy() if not df_7d.empty else pd.DataFrame()
+            if not df_fail.empty:
+                def _fail_reason(em):
+                    em = str(em or "").lower()
+                    if "timeout"  in em: return "DB timeout"
+                    if "syntax"   in em or "sql" in em: return "SQL error"
+                    if any(k in em for k in ("unsupport", "refuse", "not permit", "only select")):
+                        return "Unsupported intent"
+                    return "Other"
+                df_fail["reason"] = df_fail["error_message"].apply(_fail_reason)
+                reason_cnt = df_fail["reason"].value_counts().reset_index()
+                reason_cnt.columns = ["reason", "count"]
+                fig_fail = px.pie(
+                    reason_cnt, names="reason", values="count",
+                    hole=0.42, template="plotly_white",
+                    color_discrete_sequence=["#ef4444","#f59e0b","#94a3b8","#3b82f6"],
+                )
+                fig_fail.update_layout(**PT, height=300)
+                st.plotly_chart(fig_fail, use_container_width=True)
+            else:
+                st.info("No failures in last 7 days 🎉")
+
+        st.markdown("---")
+        st.markdown("**P95 latency trend (last 10 days)**")
+        df_10d = _sql(f"""
+            SELECT DATE(timestamp) AS day, latency_ms
+            FROM query_log
+            WHERE DATE(timestamp) >= '{d10_start}' AND latency_ms IS NOT NULL
+        """)
+        if not df_10d.empty:
+            daily_p95 = (
+                df_10d.groupby("day")["latency_ms"]
+                .apply(lambda x: float(np.percentile(x, 95)) / 1000)
+                .reset_index(name="p95_s")
+            )
+            fig_trend = go.Figure()
+            fig_trend.add_trace(go.Scatter(
+                x=daily_p95["day"], y=daily_p95["p95_s"],
+                mode="lines+markers", name="P95",
+                line=dict(color="#7c3aed", width=2.5),
+                marker=dict(size=7, color="#7c3aed"),
+            ))
+            fig_trend.add_hline(
+                y=10, line_dash="dash", line_color="#ef4444",
+                annotation_text="Target 10s",
+                annotation_position="top right",
+            )
+            fig_trend.update_layout(
+                **PT, height=300,
+                xaxis_title="", yaxis_title="Seconds",
+                yaxis=dict(rangemode="tozero"),
+            )
+            st.plotly_chart(fig_trend, use_container_width=True)
+        else:
+            st.info("Not enough data for trend chart yet — run some queries to populate it.")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 2 — QUALITY
+    # ══════════════════════════════════════════════════════════════════════════
+    with tabs[2]:
+        st.markdown("#### Quality")
+
+        if not df_14d.empty:
+            df_14d_q = df_14d.copy()
+            df_14d_q["outcome"] = df_14d_q.apply(_classify_outcome, axis=1)
+            stacked = df_14d_q.groupby(["day", "outcome"]).size().reset_index(name="count")
+            color_map = {"Success": "#2ecc71", "Failed": "#e74c3c", "Refused": "#95a5a6"}
+            fig_stack = px.bar(
+                stacked, x="day", y="count", color="outcome",
+                title="Query outcome breakdown per day (last 14 days)",
+                color_discrete_map=color_map,
+                barmode="stack", template="plotly_white",
+            )
+            fig_stack.update_layout(**PT, height=340, xaxis_title="", yaxis_title="Queries")
+            st.plotly_chart(fig_stack, use_container_width=True)
+        else:
+            st.info("No data yet.")
+
+        st.markdown("---")
+        st.markdown("#### User Feedback (30 days)")
+        fb_c1, fb_c2, fb_c3 = st.columns(3)
+        fb_c1.metric("👍 Thumbs up",   str(ups))
+        fb_c2.metric("👎 Thumbs down", str(downs))
+        fb_c3.metric("Ratio",          ratio_str)
+
+        if not df_fb30.empty and total_fb:
+            fig_fb = px.pie(
+                df_fb30, names="feedback_type", values="cnt",
+                color="feedback_type",
+                color_discrete_map={"thumbs_up":"#2ecc71","thumbs_down":"#ef4444"},
+                hole=0.5, template="plotly_white",
+                title="Feedback split",
+            )
+            fig_fb.update_layout(**PT, height=280)
+            st.plotly_chart(fig_fb, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 3 — ADOPTION
+    # ══════════════════════════════════════════════════════════════════════════
+    with tabs[3]:
+        st.markdown("#### Adoption")
+
+        adp_c1, adp_c2, adp_c3 = st.columns(3)
+        adp_c1.metric("Weekly active users (7d)", str(wau))
+        adp_c2.metric("Total queries (7d)", f"{total_q:,}")
+        qpu = round(total_q / wau, 1) if wau else 0.0
+        adp_c3.metric("Avg queries / user (7d)", str(qpu))
+
+        st.markdown("---")
+
+        df_sess = _sql(f"""
+            SELECT DATE(start_time) AS day, COUNT(*) AS sessions
+            FROM user_session
+            WHERE DATE(start_time) >= '{d14_start}'
+            GROUP BY day ORDER BY day
+        """)
+        if not df_sess.empty:
+            fig_sess = px.bar(
+                df_sess, x="day", y="sessions",
+                title="New sessions per day (last 14 days)",
+                color_discrete_sequence=["#7c3aed"],
+                template="plotly_white",
+            )
+            fig_sess.update_layout(**PT, height=300, xaxis_title="", yaxis_title="Sessions")
+            st.plotly_chart(fig_sess, use_container_width=True)
+        else:
+            st.info("No session data yet.")
+
+        st.markdown("---")
+        st.markdown("**Top intent domains (7d)**")
+        if not df_7d.empty:
+            top_intent = (
+                df_7d[df_7d["intent_domain"].fillna("") != ""]
+                ["intent_domain"].value_counts().head(10).reset_index()
+            )
+            top_intent.columns = ["intent", "count"]
+            if not top_intent.empty:
+                fig_intent = px.bar(
+                    top_intent, x="count", y="intent",
+                    orientation="h",
+                    title="",
+                    color_discrete_sequence=["#7c3aed"],
+                    template="plotly_white",
+                )
+                fig_intent.update_layout(
+                    **PT, height=max(260, len(top_intent) * 36 + 60),
+                    yaxis=dict(autorange="reversed"),
+                    xaxis_title="Queries", yaxis_title="",
+                )
+                st.plotly_chart(fig_intent, use_container_width=True)
+            else:
+                st.info("No intent data yet.")
+
+        st.markdown("**Top chart types requested (7d)**")
+        if not df_7d.empty and "chart_type" in df_7d.columns:
+            ct_cnt = (
+                df_7d[df_7d["chart_type"].fillna("") != ""]
+                ["chart_type"].value_counts().reset_index()
+            )
+            ct_cnt.columns = ["chart_type", "count"]
+            if not ct_cnt.empty:
+                fig_ct = px.pie(
+                    ct_cnt, names="chart_type", values="count",
+                    hole=0.42, template="plotly_white",
+                    color_discrete_sequence=PT["colorway"],
+                )
+                fig_ct.update_layout(**PT, height=280)
+                st.plotly_chart(fig_ct, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 4 — KPI TRACKER
+    # ══════════════════════════════════════════════════════════════════════════
+    with tabs[4]:
+        st.markdown("#### KPI Tracker")
+
+        failed_rate = 100.0 - success_r
+        qpu_val     = round(total_q / wau, 1) if wau else 0.0
+
+        def _status(actual, target, higher_is_better=True):
+            ok = actual >= target if higher_is_better else actual <= target
+            return "🟢 On track" if ok else "🔴 Off track"
+
+        p0_rows = [
+            {"Metric": "Total queries (7d)",   "Target": "≥ 500",  "Actual": f"{total_q:,}",       "Status": _status(total_q,   500),       "Deadline": "30 Apr"},
+            {"Metric": "P95 response time",    "Target": "< 10s",  "Actual": f"{p95_s:.1f}s",      "Status": _status(p95_s,     10,  False), "Deadline": "30 Apr"},
+            {"Metric": "Query success rate",   "Target": "≥ 90%",  "Actual": f"{success_r:.0f}%",  "Status": _status(success_r, 90),         "Deadline": "30 Apr"},
+            {"Metric": "Weekly active users",  "Target": "≥ 20",   "Actual": str(wau),              "Status": _status(wau,       20),         "Deadline": "30 Apr"},
+        ]
+        p1_rows = [
+            {"Metric": "Intent match rate",    "Target": "≥ 95%",  "Actual": f"{intent_match:.0f}%","Status": _status(intent_match,  95),        "Deadline": "30 Jun"},
+            {"Metric": "Thumbs-up ratio",      "Target": "≥ 80%",  "Actual": f"{thumbs_pct:.0f}%", "Status": _status(thumbs_pct,    80),         "Deadline": "30 Jun"},
+            {"Metric": "Failed query rate",    "Target": "< 10%",  "Actual": f"{failed_rate:.0f}%","Status": _status(failed_rate,   10,  False), "Deadline": "30 Jun"},
+            {"Metric": "Queries / user (7d)",  "Target": "≥ 5",    "Actual": str(qpu_val),          "Status": _status(qpu_val,       5),          "Deadline": "30 Jun"},
+        ]
+
+        st.markdown("##### P0 Metrics — deadline 30 April")
+        st.dataframe(pd.DataFrame(p0_rows), use_container_width=True, hide_index=True)
+
+        st.markdown("##### P1 Metrics — deadline 30 June")
+        st.dataframe(pd.DataFrame(p1_rows), use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.caption(f"All metrics computed live from `query_log` · `feedback` · `user_session` tables · refreshed on each page load · last updated {datetime.now().strftime('%H:%M · %d %b %Y')}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ROUTER
 # ══════════════════════════════════════════════════════════════════════════════
 {
@@ -1509,4 +1990,5 @@ def page_custom_dashboard():
     "title_360":    page_title_360,
     "chat":         page_chat,
     "dashboard":    page_custom_dashboard,
+    "analytics":    page_analytics,
 }.get(st.session_state.page, page_rights)()
