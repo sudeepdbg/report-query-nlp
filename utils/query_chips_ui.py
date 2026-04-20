@@ -88,7 +88,9 @@ def _parse_date_preset(label: str) -> Optional[DateFilter]:
     return None
 
 def render_chips(intent: QueryIntent, key_prefix: str = "chips", on_change_rerun: bool = True) -> Optional[QueryIntent]:
-    _inject_css()
+    # CSS is already injected globally in app.py — do NOT call _inject_css() here.
+    # Calling st.markdown(<style>) inside st.chat_message() causes Streamlit to
+    # render the CSS as raw visible text instead of applying it.
     _save_intent(key_prefix, intent)
     changed_intent: Optional[QueryIntent] = None
 
