@@ -329,7 +329,7 @@ with st.sidebar:
           display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🔑</div>
         <div>
           <div style="font-size:1.05rem;font-weight:800;color:#f1f5f9;letter-spacing:-.02em">Foundry Vantage</div>
-          <div style="font-size:.6rem;color:#475569;letter-spacing:.1em;text-transform:uppercase">Rights Explorer · v5.0</div>
+          <div style="font-size:.6rem;color:#475569;letter-spacing:.1em;text-transform:uppercase">· v5.0</div>
         </div>
       </div>
     </div>""", unsafe_allow_html=True)
