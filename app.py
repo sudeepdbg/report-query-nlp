@@ -25,8 +25,9 @@ from utils.database import (
     save_alert, dismiss_alert, get_alerts,
     log_query, log_feedback, update_session,
 )
+# ── New pipeline imports (replace old query_parser) ───────────────────────────
 from utils.query_pipeline import parse_query, generate, validate
-from utils.query_chips_ui import render_chips, chips_query_block
+from utils.query_chips_ui  import render_chips, chips_query_block
 
 # ─── Hybrid LLM toggle initialisation ──────────────────────────────────────
 import query_pipeline
@@ -200,6 +201,7 @@ for _k, _v in _SS_DEFAULTS.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
+# Ensure session_id is always a real UUID (handles None default above)
 if not st.session_state.session_id:
     st.session_state.session_id = str(uuid.uuid4())
 
@@ -207,6 +209,7 @@ try:
     DB_CONN = init_db()
     if not st.session_state.db_stats:
         st.session_state.db_stats = get_table_stats(DB_CONN)
+    # Bootstrap analytics session (upsert — safe to call every page load)
     update_session(
         DB_CONN,
         session_id = st.session_state.session_id,
@@ -252,6 +255,8 @@ def run_with_logging(
     region_ctx: str,
     cross_intent: bool = False,
 ) -> tuple:
+    """Wraps execute_sql with latency measurement + query_log insertion.
+    Returns (df, db_err, log_id)."""
     t0 = time.time()
     df, db_err = execute_sql(sql, DB_CONN)
     latency_ms = (time.time() - t0) * 1000
@@ -293,15 +298,6 @@ def exp_tag(days) -> str:
 
 def bool_icon(v) -> str:
     return "✅" if v in (1, "1", True, "Yes", "yes") else "❌"
-
-# ─── Badge helper ───────────────────────────────────────────────────────────
-def method_badge(method: str) -> str:
-    if method == "llm":
-        return '<span style="background:#7c3aed; color:white; border-radius:12px; padding:2px 8px; font-size:11px; font-weight:600; margin-left:6px;">🤖 LLM</span>'
-    elif method == "rule":
-        return '<span style="background:#475569; color:white; border-radius:12px; padding:2px 8px; font-size:11px; font-weight:600; margin-left:6px;">📜 Rule</span>'
-    else:
-        return ''
 
 def stat_tiles(items: list):
     for col, (val, lbl, color) in zip(st.columns(len(items)), items):
@@ -369,21 +365,25 @@ with st.sidebar:
     st.selectbox("Persona", _personas,
                  index=_personas.index(st.session_state.persona) if st.session_state.persona in _personas else 0,
                  key="_per_sel", on_change=_on_persona)
-
-    # LLM toggle + live status
+    
+    # ─── LLM toggle + status ───────────────────────────────────────────────
     llm_enabled = st.checkbox("🤖 Use LLM (Ollama)", value=st.session_state.llm_enabled)
     if llm_enabled != st.session_state.llm_enabled:
         st.session_state.llm_enabled = llm_enabled
         query_pipeline.USE_LLM = llm_enabled
         st.rerun()
-    status = query_pipeline.LLM_LAST_STATUS
-    if status["success"] is True:
-        st.markdown("""<div style="margin:4px 0 0;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);border-radius:6px;padding:4px 8px;font-size:.68rem;color:#6ee7b7">✅ Ollama OK — last query LLM-parsed</div>""", unsafe_allow_html=True)
-    elif status["success"] is False:
-        st.markdown(f"""<div style="margin:4px 0 0;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);border-radius:6px;padding:4px 8px;font-size:.68rem;color:#fca5a5">⚠ Ollama: {status["error"]}</div>""", unsafe_allow_html=True)
+    # Live LLM status — updated after every query
+    _llm_status = query_pipeline.LLM_LAST_STATUS
+    if _llm_status["success"] is True:
+        st.markdown("""<div style="margin:4px 0 0;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);
+border-radius:6px;padding:4px 8px;font-size:.68rem;color:#6ee7b7">✅ Ollama OK — last query LLM-parsed</div>""", unsafe_allow_html=True)
+    elif _llm_status["success"] is False:
+        st.markdown(f"""<div style="margin:4px 0 0;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);
+border-radius:6px;padding:4px 8px;font-size:.68rem;color:#fca5a5">⚠ Ollama: {_llm_status["error"]}</div>""", unsafe_allow_html=True)
     else:
-        st.markdown("""<div style="margin:4px 0 0;background:rgba(100,116,139,.1);border:1px solid rgba(100,116,139,.2);border-radius:6px;padding:4px 8px;font-size:.68rem;color:#94a3b8">⏸ No query run yet</div>""", unsafe_allow_html=True)
-
+        st.markdown("""<div style="margin:4px 0 0;background:rgba(100,116,139,.1);border:1px solid rgba(100,116,139,.2);
+border-radius:6px;padding:4px 8px;font-size:.68rem;color:#94a3b8">⏸ No query run yet</div>""", unsafe_allow_html=True)
+    
     st.markdown('</div>', unsafe_allow_html=True)
 
     stats = st.session_state.db_stats
@@ -804,6 +804,275 @@ def page_work_orders():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# LLM / RULE BADGE HELPER  ◄── must be defined BEFORE page_chat (v5.1)
+# ══════════════════════════════════════════════════════════════════════════════
+def _render_method_badge(match_method: str):
+    """Render a small inline pill showing LLM or Rule-based parse."""
+    if match_method == "llm":
+        st.markdown(
+            '<span style="display:inline-block;background:#ede9fe;border:1px solid #c4b5fd;'
+            'border-radius:20px;padding:2px 10px;font-size:.72rem;font-weight:700;color:#5b21b6;">'
+            '🤖 LLM parsed</span>',
+            unsafe_allow_html=True,
+        )
+    elif match_method == "rule":
+        st.markdown(
+            '<span style="display:inline-block;background:#f0fdf4;border:1px solid #86efac;'
+            'border-radius:20px;padding:2px 10px;font-size:.72rem;font-weight:700;color:#166534;">'
+            '⚙️ Rule parsed</span>',
+            unsafe_allow_html=True,
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CHAT / QUERY  ◄── 3-stage pipeline + SQL chips  (PATCHED v5.1)
+# FIXES:
+#   1. LLM vs Rule badge rendered after every response
+#   2. Feedback race-condition fixed — rerun moved OUTSIDE button block
+#   3. run_with_logging receives intent.domain (str), not raw intent object
+#   4. match_method + log_id stored in chat_history for history feedback
+# ══════════════════════════════════════════════════════════════════════════════
+def page_chat():
+    reg = st.session_state.current_region
+    st.markdown('<div class="page-header">💬 Chat Query</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="page-sub">Natural language rights interrogation · {reg} · 3-stage pipeline with interactive SQL chips</div>', unsafe_allow_html=True)
+
+    # ── Sample queries (empty state) ─────────────────────────────────────────
+    if not st.session_state.chat_history:
+        st.markdown('<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:12px">', unsafe_allow_html=True)
+        st.markdown('<div style="font-size:.8rem;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">💡 Sample queries</div>', unsafe_allow_html=True)
+        groups = {
+            "🔗 Cross-table": ["Movies with DNA flags","Titles with rights, DNA and sales deals","Rights expiring in 60 days with active sales deals","Work orders linked to expiring rights"],
+            "📋 Rights":      ["What titles do we have SVOD rights to","Show SVOD rights expiring in 30 days",'What rights do we hold for "Succession"',"Show titles with exclusive PayTV rights"],
+            "🎬 Movies":      ["Show all movies in the slate","Movies by box office revenue","Franchise box office breakdown","Theatrical movies with active rights"],
+            "🚫 DNA/Sales":   ["Show do-not-air restrictions","Active deals by vendor","Sales deals by buyer","Deal source breakdown TRL C2 FRL"],
+        }
+        for grp, qs in groups.items():
+            st.markdown(f'<div style="font-size:.72rem;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin:8px 0 4px">{grp}</div>', unsafe_allow_html=True)
+            for col, q in zip(st.columns(len(qs)), qs):
+                if col.button(q, key=f"sug_{hash(q)}", use_container_width=True):
+                    st.session_state.pending_prompt = q
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    col_a, col_b = st.columns([3,1])
+    with col_a:
+        show_sql = st.toggle("Show SQL", value=st.session_state.user_prefs.get("show_sql",True), key="sql_tog")
+        st.session_state.user_prefs["show_sql"] = show_sql
+    with col_b:
+        raw_sql_mode = st.toggle("⚡ Raw SQL", value=st.session_state.user_prefs.get("raw_sql_mode",False), key="raw_sql_tog")
+        st.session_state.user_prefs["raw_sql_mode"] = raw_sql_mode
+
+    # ── Raw SQL mode ─────────────────────────────────────────────────────────
+    if raw_sql_mode:
+        st.markdown('<div style="background:#f8faff;border:1px solid #c7d2fe;border-radius:10px;padding:12px 16px;margin-bottom:10px"><div style="font-size:.78rem;font-weight:700;color:#4f46e5;margin-bottom:6px">⚡ Raw SQL Mode</div><div style="font-size:.72rem;color:#64748b">Tables: <code>movie · title · series · season · media_rights · content_deal · exhibition_restrictions · elemental_rights · elemental_deal · do_not_air · sales_deal · deals · vendors · work_orders</code></div></div>', unsafe_allow_html=True)
+        RAW_TEMPLATES = {
+            "— Pick a template —":"",
+            "Title health (rights + DNA + sales)":"""SELECT t.title_name, t.title_type, t.content_category, COUNT(DISTINCT mr.rights_id) AS active_rights, SUM(CASE WHEN mr.term_to<=DATE('now','+90 days') AND mr.status='Active' THEN 1 ELSE 0 END) AS expiring_90d, COUNT(DISTINCT dna.dna_id) AS dna_flags, GROUP_CONCAT(DISTINCT dna.reason_category) AS dna_reasons, COUNT(DISTINCT sd.sales_deal_id) AS sales_deals, GROUP_CONCAT(DISTINCT sd.buyer) AS buyers FROM title t LEFT JOIN media_rights mr ON t.title_id=mr.title_id AND mr.status='Active' LEFT JOIN do_not_air dna ON t.title_id=dna.title_id AND dna.active=1 LEFT JOIN sales_deal sd ON t.title_id=sd.title_id WHERE UPPER(t.region)='NA' GROUP BY t.title_id ORDER BY dna_flags DESC, expiring_90d DESC LIMIT 100""",
+            "Expiry + sales overlap":"""SELECT mr.title_name, mr.media_platform_primary AS rights_platform, mr.term_to AS rights_expiry, CAST(JULIANDAY(mr.term_to)-JULIANDAY('now') AS INTEGER) AS days_left, mr.exclusivity, sd.buyer, sd.deal_value, sd.status AS sale_status, CASE WHEN sd.sales_deal_id IS NOT NULL THEN '⚠ Active Sale' ELSE '— No Sale' END AS flag FROM media_rights mr JOIN content_deal cd ON mr.deal_id=cd.deal_id LEFT JOIN sales_deal sd ON mr.title_id=sd.title_id AND sd.status='Active' WHERE UPPER(mr.region)='NA' AND mr.status='Active' AND mr.term_to<=DATE('now','+90 days') ORDER BY days_left ASC LIMIT 100""",
+            "Movies + DNA flags":"""SELECT m.movie_title, m.content_category, m.genre, m.franchise, m.box_office_gross_usd_m, COUNT(DISTINCT mr.rights_id) AS active_rights, COUNT(DISTINCT dna.dna_id) AS dna_flags, GROUP_CONCAT(DISTINCT dna.reason_category) AS dna_reasons, CASE WHEN COUNT(dna.dna_id)>0 THEN '🚫 Flagged' ELSE '✅ Clean' END AS dna_status FROM movie m LEFT JOIN title t ON t.movie_id=m.movie_id LEFT JOIN media_rights mr ON mr.title_id=t.title_id AND mr.status='Active' LEFT JOIN do_not_air dna ON dna.title_id=t.title_id AND dna.active=1 GROUP BY m.movie_id ORDER BY dna_flags DESC, m.box_office_gross_usd_m DESC""",
+        }
+        sel_tpl = st.selectbox("Quick-start template", list(RAW_TEMPLATES.keys()), key="raw_tpl")
+        default_sql = RAW_TEMPLATES[sel_tpl] if sel_tpl != "— Pick a template —" else st.session_state.get("last_raw_sql","SELECT * FROM movie LIMIT 10")
+        raw_sql_in = st.text_area("SQL Editor", value=default_sql, height=220, key="raw_sql_input")
+        if st.button("▶ Run SQL", type="primary", key="run_raw_btn") and raw_sql_in.strip():
+            st.session_state["last_raw_sql"] = raw_sql_in.strip()
+            with st.spinner("Running…"):
+                res_df, db_err = execute_sql(raw_sql_in.strip(), DB_CONN)
+            if db_err:
+                st.error(f"❌ SQL Error: {db_err}")
+            elif res_df is not None and not res_df.empty:
+                st.success(f"✅ {len(res_df):,} rows")
+                if show_sql: st.markdown(f'<div class="sql-box">{html.escape(raw_sql_in.strip())}</div>', unsafe_allow_html=True)
+                num_cols = [c for c in res_df.columns if pd.api.types.is_numeric_dtype(res_df[c])]
+                if num_cols:
+                    mc = st.columns(min(4,len(num_cols)))
+                    for i, nc in enumerate(num_cols[:4]): mc[i].metric(nc, f"{res_df[nc].sum():,.0f}")
+                if len(res_df.columns) >= 2:
+                    fn = next((c for c in res_df.columns if pd.api.types.is_numeric_dtype(res_df[c])), None)
+                    if fn and res_df.columns[0] != fn and len(res_df) <= 50:
+                        st.plotly_chart(bar(res_df.head(30), res_df.columns[0], fn, "Query Result"), use_container_width=True)
+                st.dataframe(res_df, use_container_width=True, hide_index=True, height=380)
+                st.download_button("📥 CSV", res_df.to_csv(index=False),"raw_sql_result.csv","text/csv",key="dl_raw")
+                st.session_state.chat_history.append({
+                    "question": f"[SQL] {raw_sql_in.strip()[:80]}…",
+                    "answer": f"📊 **{len(res_df):,} records** — raw SQL",
+                    "data": res_df.copy(), "chart": None, "metrics": [],
+                    "sql": raw_sql_in.strip(), "region": reg, "chips": [],
+                    "log_id": None, "match_method": "rule",
+                })
+            else:
+                st.warning("No records returned.")
+        st.divider()
+
+    # ── Chat history ─────────────────────────────────────────────────────────
+    for i, msg in enumerate(st.session_state.chat_history):
+        with st.chat_message("user"):
+            st.markdown(f"**{msg['question']}**  `{msg.get('region','')}`")
+        with st.chat_message("assistant", avatar="🔑"):
+            # ── LLM vs Rule badge (history) ───────────────────────────────────
+            _render_method_badge(msg.get("match_method", "rule"))
+
+            chips = msg.get("chips", [])
+            if chips:
+                from utils.query_chips_ui import _KIND_CLASS
+                parts = ['<div class="chip-row"><span class="chip-hint">🔍</span>']
+                for chip in chips:
+                    cls = _KIND_CLASS.get(chip["kind"],"chip")
+                    parts.append(f'<span class="{cls}"><span class="chip-label">{chip["label"]}</span>{html.escape(str(chip["value"]))}</span>')
+                st.markdown("".join(parts) + "</div>", unsafe_allow_html=True)
+            if msg.get("sql") and show_sql:
+                st.markdown(f'<div class="sql-box">{html.escape(msg["sql"])}</div>', unsafe_allow_html=True)
+            if msg.get("metrics"):
+                mc = st.columns(len(msg["metrics"]))
+                for c, m in zip(mc, msg["metrics"]): c.metric(m["label"], m["value"])
+            if msg.get("chart"):
+                st.plotly_chart(msg["chart"], use_container_width=True, key=f"hchart_{i}")
+            st.markdown(msg.get("answer","Here are the results:"))
+            if msg.get("data") is not None and not msg["data"].empty:
+                st.dataframe(msg["data"], use_container_width=True, hide_index=True, height=280)
+                st.download_button("📥 CSV", msg["data"].to_csv(index=False), f"query_{i}.csv","text/csv",key=f"dl_h_{i}")
+
+            # ── Feedback buttons for history entries ─────────────────────────
+            # FIX: set session_state first, then rerun once — avoids race where
+            # st.rerun() inside the button block skips the DB write.
+            msg_log_id = msg.get("log_id")
+            if msg_log_id:
+                fb_key = f"fb_{msg_log_id}"
+                if fb_key not in st.session_state:
+                    hfc1, hfc2, _ = st.columns([1, 1, 8])
+                    with hfc1:
+                        if st.button("👍", key=f"up_h_{i}_{msg_log_id}", help="Good answer"):
+                            log_feedback(DB_CONN, msg_log_id, "thumbs_up")
+                            st.session_state[fb_key] = "thumbs_up"
+                    with hfc2:
+                        if st.button("👎", key=f"dn_h_{i}_{msg_log_id}", help="Bad answer"):
+                            log_feedback(DB_CONN, msg_log_id, "thumbs_down")
+                            st.session_state[fb_key] = "thumbs_down"
+                    if fb_key in st.session_state:
+                        st.rerun()
+                else:
+                    icon = "👍" if st.session_state[fb_key] == "thumbs_up" else "👎"
+                    st.caption(f"Feedback recorded {icon}")
+
+    # ── Live input ────────────────────────────────────────────────────────────
+    user_input = st.chat_input(f"Ask about rights, titles, expiry, DNA… [{reg}]")
+    active_prompt = None
+    if st.session_state.get("pending_prompt"):
+        active_prompt = st.session_state.pending_prompt; st.session_state.pending_prompt = None
+    elif user_input:
+        active_prompt = user_input
+
+    if active_prompt:
+        with st.chat_message("user"):
+            st.markdown(f"**{active_prompt}**  `{reg}`")
+
+        with st.chat_message("assistant", avatar="🔑"):
+            with st.spinner("Analysing…"):
+                sql, error, chart_type, region_ctx, intent = chips_query_block(
+                    question=active_prompt,
+                    selected_region=reg,
+                    key_prefix=f"chat_{abs(hash(active_prompt)) % 65536}",
+                    show_sql=show_sql,
+                )
+
+            # ── LLM vs Rule badge ─────────────────────────────────────────────
+            _render_method_badge(getattr(intent, "match_method", "rule"))
+
+            if error:
+                st.error(f"❌ {error}")
+            else:
+                # FIX: extract domain as str — never pass raw intent object
+                intent_domain = getattr(intent, "domain", "") or ""
+                cross = bool(getattr(intent, "cross_intent", None))
+
+                res_df, db_err, log_id = run_with_logging(
+                    sql, active_prompt,
+                    intent_domain,
+                    chart_type, region_ctx,
+                    cross_intent=cross,
+                )
+                if db_err:
+                    st.error(f"DB error: {db_err}")
+                elif res_df is not None and not res_df.empty:
+                    # Metric strip
+                    metrics_data = []
+                    val_cols = [c for c in res_df.columns if any(x in c.lower() for x in ["count","total","value","fee","days"])]
+                    if val_cols:
+                        vc = val_cols[0]
+                        try:
+                            res_df[vc] = pd.to_numeric(res_df[vc], errors="coerce")
+                            mc = st.columns(4)
+                            mc[0].metric("Total / Sum", f"{res_df[vc].sum():,.0f}")
+                            mc[1].metric("Avg",         f"{res_df[vc].mean():,.1f}")
+                            mc[2].metric("Records",     f"{len(res_df):,}")
+                            mc[3].metric("Max",         f"{res_df[vc].max():,.0f}")
+                            metrics_data = [
+                                {"label":"Total","value":f"{res_df[vc].sum():,.0f}"},
+                                {"label":"Avg","value":f"{res_df[vc].mean():,.1f}"},
+                                {"label":"Records","value":f"{len(res_df):,}"},
+                                {"label":"Max","value":f"{res_df[vc].max():,.0f}"},
+                            ]
+                        except (ValueError, TypeError): pass
+
+                    # Chart
+                    fig = None
+                    if chart_type == "bar" and len(res_df.columns) >= 2:
+                        x_col = res_df.columns[0]
+                        y_col = next((c for c in res_df.columns[1:] if pd.api.types.is_numeric_dtype(res_df[c])), res_df.columns[1])
+                        try: res_df[y_col] = pd.to_numeric(res_df[y_col], errors="coerce")
+                        except: pass
+                        fig = bar(res_df.head(30), x_col, y_col, active_prompt[:60])
+                    elif chart_type == "pie" and len(res_df.columns) >= 2:
+                        fig = pie(res_df, res_df.columns[0], res_df.columns[1], active_prompt[:60])
+                    if fig: st.plotly_chart(fig, use_container_width=True)
+
+                    answer_txt = (
+                        f"📊 **{len(res_df):,} records** for **{region_ctx}**."
+                        + (" Sorted by expiry." if "expir" in active_prompt.lower() else "")
+                    )
+                    st.markdown(answer_txt)
+                    st.dataframe(res_df, use_container_width=True, hide_index=True, height=300)
+                    st.download_button("📥 Download CSV", res_df.to_csv(index=False), f"rights_query_{region_ctx}.csv","text/csv",key="dl_live")
+
+                    # ── Feedback buttons (live response) ──────────────────────
+                    # FIX: set session_state first, then rerun once outside blocks
+                    if log_id:
+                        fb_key = f"fb_{log_id}"
+                        if fb_key not in st.session_state:
+                            fc1, fc2, _ = st.columns([1, 1, 8])
+                            with fc1:
+                                if st.button("👍", key=f"up_live_{log_id}", help="Good answer"):
+                                    log_feedback(DB_CONN, log_id, "thumbs_up")
+                                    st.session_state[fb_key] = "thumbs_up"
+                            with fc2:
+                                if st.button("👎", key=f"dn_live_{log_id}", help="Bad answer"):
+                                    log_feedback(DB_CONN, log_id, "thumbs_down")
+                                    st.session_state[fb_key] = "thumbs_down"
+                            if fb_key in st.session_state:
+                                st.rerun()
+                        else:
+                            icon = "👍" if st.session_state[fb_key] == "thumbs_up" else "👎"
+                            st.caption(f"Feedback recorded {icon}")
+
+                    # FIX: store log_id AND match_method for history replay
+                    st.session_state.chat_history.append({
+                        "question": active_prompt, "answer": answer_txt,
+                        "data": res_df.copy(), "chart": fig,
+                        "metrics": metrics_data, "sql": sql,
+                        "region": region_ctx, "chips": intent.chips,
+                        "log_id": log_id,
+                        "match_method": getattr(intent, "match_method", "rule"),
+                    })
+                else:
+                    st.warning("No records returned — try removing a chip filter or rewording your query.")
+
+
+    if st.session_state.chat_history:
+        if st.button("🗑 Clear Chat", key="clear_chat"):
+            st.session_state.chat_history = []; st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # DEALS PAGE
 # ══════════════════════════════════════════════════════════════════════════════
 def page_deals():
@@ -1142,8 +1411,9 @@ def page_title_360():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CUSTOM DASHBOARD BUILDER
+# CUSTOM DASHBOARD BUILDER  ◄── integrated with 3-stage pipeline + chips
 # ══════════════════════════════════════════════════════════════════════════════
+
 def _db_save_pin(df: pd.DataFrame, fig, query_text: str, chart_type: str, key_prefix: str):
     if st.button("📌 Save to Dashboard", key=f"save_dash_{key_prefix}", help="Pin this chart"):
         st.session_state.dashboard_pins.insert(0, {
@@ -1153,6 +1423,7 @@ def _db_save_pin(df: pd.DataFrame, fig, query_text: str, chart_type: str, key_pr
             "region": st.session_state.get("current_region",""),
         })
         st.success("✅ Pinned! Visit 📐 Custom Dashboard in the sidebar.")
+
 
 def _db_suggested_queries(key_prefix: str = "sug"):
     suggs = [("⏰","Rights expiring in 30 days","SVOD rights expiring in 30 days"),("🌍","Distribution by Territory","Distribution breakdown by territory"),("📺","Rights by Platform","Rights distribution by media platform"),("🚫","Movies with DNA flags","Movies with do-not-air restrictions"),("⭐","Exclusive rights count","How many exclusive rights do we hold"),("💸","Top buyers by deal value","Sales deals by buyer sorted by deal value"),("💼","Rights by deal source","Deal source breakdown TRL C2 FRL"),("🔗","Expiring rights + active sales","Rights expiring in 60 days with active sales deals")]
@@ -1164,22 +1435,27 @@ def _db_suggested_queries(key_prefix: str = "sug"):
                 st.session_state["_db_prefill"] = query; st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
+
 def render_dynamic_dashboard(df: pd.DataFrame, chart_type: str, query_text: str, *, key_prefix: str="dyn", show_save_button: bool=True) -> Optional[go.Figure]:
-    q_lower = query_text.lower()
+    """Route df+chart_type to the best Plotly visualisation. chart_type='table' always renders table (no auto-chart)."""
+    q_lower  = query_text.lower()
     is_trend = any(kw in q_lower for kw in ["trend","over time","monthly","weekly","by month","by year"])
+    # Exclude ID-like columns from chart candidates
     _ID_COLS = {"deal_id","rights_id","sales_deal_id","work_order_id","title_id","dna_id","id"}
     num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c.lower() not in _ID_COLS]
     str_cols = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]
-    time_cols = [c for c in df.columns if any(kw in c.lower() for kw in ["term_to","term_from","date","month","year","timestamp","expiry"])]
-    title_txt = query_text[:70] + ("…" if len(query_text)>70 else "")
+    time_cols= [c for c in df.columns if any(kw in c.lower() for kw in ["term_to","term_from","date","month","year","timestamp","expiry"])]
+    title_txt= query_text[:70] + ("…" if len(query_text)>70 else "")
     fig: Optional[go.Figure] = None
 
+    # Coerce numeric-looking strings
     for c in list(str_cols):
         try:
             df = df.copy(); df[c] = pd.to_numeric(df[c], errors="raise")
             num_cols.append(c); str_cols.remove(c)
         except: pass
 
+    # 1. Single-value metric card
     if len(df)==1 and len(df.columns)<=2:
         vc = num_cols[0] if num_cols else df.columns[-1]
         lc = str_cols[0] if str_cols else df.columns[0]
@@ -1193,6 +1469,7 @@ def render_dynamic_dashboard(df: pd.DataFrame, chart_type: str, query_text: str,
         if show_save_button: _db_save_pin(df, None, query_text, chart_type, key_prefix)
         return None
 
+    # 2. Table — always raw table, never auto-chart (fixes screenshot bug)
     if chart_type == "table":
         if num_cols:
             mc = st.columns(min(4,len(num_cols)))
@@ -1204,6 +1481,7 @@ def render_dynamic_dashboard(df: pd.DataFrame, chart_type: str, query_text: str,
         if show_save_button: _db_save_pin(df, None, query_text, chart_type, key_prefix)
         return None
 
+    # 3. Trend / line chart
     if (is_trend or chart_type=="line") and time_cols and num_cols:
         tc = time_cols[0]; yc = num_cols[0]
         try: df=df.copy(); df[tc]=pd.to_datetime(df[tc],errors="coerce"); df=df.dropna(subset=[tc]).sort_values(tc)
@@ -1218,6 +1496,7 @@ def render_dynamic_dashboard(df: pd.DataFrame, chart_type: str, query_text: str,
         _dash_tabbed(fig,df,num_cols,key_prefix,"line",query_text,show_save_button)
         return fig
 
+    # 4. Bar chart — horizontal, top-10, gradient, region-coloured
     if chart_type=="bar" and str_cols and num_cols:
         xc=str_cols[0]; yc=num_cols[0]
         top = df.nlargest(10,yc) if len(df)>10 else df.sort_values(yc,ascending=False)
@@ -1237,6 +1516,7 @@ def render_dynamic_dashboard(df: pd.DataFrame, chart_type: str, query_text: str,
         _dash_tabbed(fig,df,num_cols,key_prefix,"bar",query_text,show_save_button,len(df)>10)
         return fig
 
+    # 5. Pie / donut
     if chart_type=="pie" and str_cols and num_cols:
         pdf = df.head(10) if len(df)>10 else df
         fig = px.pie(pdf,names=str_cols[0],values=num_cols[0],title=title_txt,hole=0.42,color_discrete_sequence=PT["colorway"])
@@ -1244,6 +1524,7 @@ def render_dynamic_dashboard(df: pd.DataFrame, chart_type: str, query_text: str,
         _dash_tabbed(fig,df,num_cols,key_prefix,"pie",query_text,show_save_button)
         return fig
 
+    # 6. Multi-column aggregation fallback
     if len(df.columns)>=2 and str_cols and num_cols:
         color_col = "region" if "region" in df.columns and df["region"].nunique()>1 else None
         top = df.nlargest(10,num_cols[0]) if len(df)>10 else df.sort_values(num_cols[0],ascending=False)
@@ -1255,11 +1536,14 @@ def render_dynamic_dashboard(df: pd.DataFrame, chart_type: str, query_text: str,
         _dash_tabbed(fig,df,num_cols,key_prefix,"multi",query_text,show_save_button,len(df)>10)
         return fig
 
+    # 7. Pure table fallback
     st.dataframe(df, use_container_width=True, hide_index=True, height=300)
     if show_save_button: _db_save_pin(df, None, query_text, chart_type, key_prefix)
     return None
 
+
 def _dash_tabbed(fig, df, num_cols, key_prefix, suffix, query_text, show_save, overflow=False):
+    """Shared Chart View | Data View tab renderer."""
     if len(df.columns) > 2:
         tc, td = st.tabs(["📊 Chart View","📋 Data View"])
         with tc:
@@ -1278,12 +1562,14 @@ def _dash_tabbed(fig, df, num_cols, key_prefix, suffix, query_text, show_save, o
         if overflow: st.caption(f"Top 10 of {len(df):,} rows.")
     if show_save: _db_save_pin(df, fig, query_text, "bar", key_prefix)
 
+
 def page_custom_dashboard():
     reg = st.session_state.current_region
     pin_count = len(st.session_state.dashboard_pins)
     st.markdown('<div class="page-header">📐 Custom Dashboard Builder</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="page-sub">Natural language → dynamic visualisation · <b>{reg}</b> · <span class="db-query-pill">📌 {pin_count} pinned</span></div>', unsafe_allow_html=True)
 
+    # ── Query toolbar ─────────────────────────────────────────────────────────
     with st.container(border=True):
         ci, cr = st.columns([5,1])
         with ci:
@@ -1298,8 +1584,10 @@ def page_custom_dashboard():
 
     st.markdown("---")
 
+    # ── Execute ───────────────────────────────────────────────────────────────
     if run_clicked and query_text.strip():
         with st.spinner("Parsing and fetching…"):
+            # ── 3-STAGE PIPELINE + CHIPS ─────────────────────────────────────
             sql, error, chart_type, region_ctx, intent = chips_query_block(
                 question=query_text.strip(),
                 selected_region=reg,
@@ -1343,6 +1631,7 @@ def page_custom_dashboard():
         </div>""", unsafe_allow_html=True)
         _db_suggested_queries("empty")
 
+    # ── Pinned dashboard grid ─────────────────────────────────────────────────
     if st.session_state.dashboard_pins:
         st.markdown("---")
         hc, hl, hx = st.columns([4,2,2])
@@ -1381,6 +1670,16 @@ def page_custom_dashboard():
 # ══════════════════════════════════════════════════════════════════════════════
 # ANALYTICS
 # ══════════════════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ANALYTICS  ◄── PATCHED v5.1
+# FIXES:
+#   1. df_7d includes cross_intent column (was missing → potential KeyError)
+#   2. df_14d includes error_message column (was missing → _classify_outcome broke)
+#   3. Feedback ups/downs use .get() null-safety; empty table no longer returns 0
+#   4. _classify_outcome uses row.get() to avoid KeyError on missing column
+#   5. Quality tab: new LLM vs Rule parse-method breakdown chart
+# ══════════════════════════════════════════════════════════════════════════════
 def page_analytics():
     st.markdown('<div class="page-header">📊 Analytics</div>', unsafe_allow_html=True)
     st.markdown('<div class="page-sub">System health · performance · quality · adoption · KPI tracker</div>', unsafe_allow_html=True)
@@ -1393,23 +1692,30 @@ def page_analytics():
         except Exception:
             return pd.DataFrame()
 
-    today = pd.Timestamp.now().normalize()
-    d7_start = (today - pd.Timedelta(days=6)).strftime("%Y-%m-%d")
+    today     = pd.Timestamp.now().normalize()
+    d7_start  = (today - pd.Timedelta(days=6)).strftime("%Y-%m-%d")
     d14_start = (today - pd.Timedelta(days=13)).strftime("%Y-%m-%d")
     d30_start = (today - pd.Timedelta(days=29)).strftime("%Y-%m-%d")
     d10_start = (today - pd.Timedelta(days=9)).strftime("%Y-%m-%d")
 
+    # ── Pre-fetch shared datasets ─────────────────────────────────────────────
+    # FIX 1: added cross_intent column (was missing)
     df_7d = _sql(f"""
-        SELECT log_id, timestamp, session_id, success, error_message,
+        SELECT log_id, timestamp, session_id, success,
+               COALESCE(error_message,'') AS error_message,
                latency_ms, intent_domain, rows_returned, chart_type, cross_intent
         FROM query_log
         WHERE DATE(timestamp) >= '{d7_start}'
     """)
+
+    # FIX 2: added error_message column (was missing → _classify_outcome KeyError)
     df_14d = _sql(f"""
-        SELECT DATE(timestamp) AS day, success, error_message
+        SELECT DATE(timestamp) AS day, success,
+               COALESCE(error_message,'') AS error_message
         FROM query_log
         WHERE DATE(timestamp) >= '{d14_start}'
     """)
+
     df_fb30 = _sql(f"""
         SELECT feedback_type, COUNT(*) AS cnt
         FROM feedback
@@ -1417,11 +1723,12 @@ def page_analytics():
         GROUP BY feedback_type
     """)
 
-    total_q = len(df_7d)
+    # ── Headline KPIs ─────────────────────────────────────────────────────────
+    total_q   = len(df_7d)
     latencies = df_7d["latency_ms"].dropna().values if not df_7d.empty else np.array([])
-    p95_s = float(np.percentile(latencies, 95)) / 1000 if len(latencies) else 0.0
-    p50_s = float(np.percentile(latencies, 50)) / 1000 if len(latencies) else 0.0
-    p99_s = float(np.percentile(latencies, 99)) / 1000 if len(latencies) else 0.0
+    p95_s     = float(np.percentile(latencies, 95)) / 1000 if len(latencies) else 0.0
+    p50_s     = float(np.percentile(latencies, 50)) / 1000 if len(latencies) else 0.0
+    p99_s     = float(np.percentile(latencies, 99)) / 1000 if len(latencies) else 0.0
     success_r = (int(df_7d["success"].sum()) / total_q * 100) if total_q else 0.0
 
     if total_q and not df_7d.empty:
@@ -1435,33 +1742,36 @@ def page_analytics():
 
     wau = int(df_7d["session_id"].nunique()) if not df_7d.empty else 0
 
+    # FIX 3: robust null-safe feedback count
     if not df_fb30.empty:
-        up_rows = df_fb30[df_fb30["feedback_type"] == "thumbs_up"]["cnt"]
+        up_rows   = df_fb30[df_fb30["feedback_type"] == "thumbs_up"]["cnt"]
         down_rows = df_fb30[df_fb30["feedback_type"] == "thumbs_down"]["cnt"]
-        ups = int(up_rows.sum()) if not up_rows.empty else 0
+        ups   = int(up_rows.sum())   if not up_rows.empty   else 0
         downs = int(down_rows.sum()) if not down_rows.empty else 0
     else:
         ups = downs = 0
 
-    total_fb = ups + downs
+    total_fb   = ups + downs
     thumbs_pct = ups / total_fb * 100 if total_fb else 0.0
-    ratio_str = f"{ups/downs:.1f}× upvotes/downvotes" if downs else "No downvotes yet"
+    ratio_str  = f"{ups/downs:.1f}× upvotes/downvotes" if downs else "No downvotes yet"
 
+    # ── Prior-week deltas ─────────────────────────────────────────────────────
     df_prev = _sql(f"""
         SELECT log_id, session_id, success
         FROM query_log
         WHERE DATE(timestamp) >= '{(today - pd.Timedelta(days=13)).strftime('%Y-%m-%d')}'
-          AND DATE(timestamp) < '{d7_start}'
+          AND DATE(timestamp) <  '{d7_start}'
     """)
     prev_total = len(df_prev)
-    prev_wau = int(df_prev["session_id"].nunique()) if not df_prev.empty else 0
-    prev_sr = float(df_prev["success"].mean() * 100) if not df_prev.empty and len(df_prev) else 0.0
+    prev_wau   = int(df_prev["session_id"].nunique()) if not df_prev.empty else 0
+    prev_sr    = float(df_prev["success"].mean() * 100) if not df_prev.empty and len(df_prev) else 0.0
 
     delta_q_val = total_q - prev_total
-    delta_q = f"{delta_q_val:+,} vs last week" if prev_total else "—"
-    delta_wau = f"{wau - prev_wau:+} vs last week" if prev_wau else "—"
-    delta_sr = f"{success_r - prev_sr:+.0f}pp vs last week" if prev_sr else "—"
+    delta_q     = f"{delta_q_val:+,} vs last week" if prev_total else "—"
+    delta_wau   = f"{wau - prev_wau:+} vs last week" if prev_wau else "—"
+    delta_sr    = f"{success_r - prev_sr:+.0f}pp vs last week" if prev_sr else "—"
 
+    # FIX 4: use row.get() so missing column never causes KeyError
     def _classify_outcome(row):
         if row.get("success") == 1:
             return "Success"
@@ -1470,6 +1780,9 @@ def page_analytics():
             return "Refused"
         return "Failed"
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 0 — OVERVIEW
+    # ══════════════════════════════════════════════════════════════════════════
     with tabs[0]:
         st.markdown("#### SYSTEM HEALTH — AT A GLANCE")
         st.markdown("---")
@@ -1487,7 +1800,6 @@ def page_analytics():
         with r2c2: st.metric("Thumbs-up ratio (30d)", f"{thumbs_pct:.0f}%", ratio_str)
 
         st.markdown("---")
-
         left, right = st.columns([6, 4], gap="large")
 
         with left:
@@ -1496,7 +1808,7 @@ def page_analytics():
             if not df_14d.empty:
                 daily_cnt = df_14d.groupby("day").size().reset_index(name="queries")
                 fig_daily = px.bar(daily_cnt, x="day", y="queries",
-                                   color_discrete_sequence=["#5B5FC7"], template="plotly_white")
+                    color_discrete_sequence=["#5B5FC7"], template="plotly_white")
                 fig_daily.update_layout(**PT, height=320, xaxis_title="", yaxis_title="")
                 st.plotly_chart(fig_daily, use_container_width=True)
             else:
@@ -1512,14 +1824,17 @@ def page_analytics():
                 outcome_cnt.columns = ["outcome", "count"]
                 color_map = {"Success": "#2ecc71", "Failed": "#e74c3c", "Refused": "#95a5a6"}
                 fig_pie = px.pie(outcome_cnt, names="outcome", values="count",
-                                 color="outcome", color_discrete_map=color_map,
-                                 hole=0.55, template="plotly_white")
+                    color="outcome", color_discrete_map=color_map,
+                    hole=0.55, template="plotly_white")
                 fig_pie.update_layout(**PT, height=320, showlegend=True)
                 fig_pie.update_traces(textposition="inside", textinfo="percent")
                 st.plotly_chart(fig_pie, use_container_width=True)
             else:
                 st.info("No outcome data yet.")
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 1 — PERFORMANCE
+    # ══════════════════════════════════════════════════════════════════════════
     with tabs[1]:
         st.markdown("#### Performance")
 
@@ -1537,8 +1852,8 @@ def page_analytics():
             st.markdown("**Latency distribution (ms)**")
             if len(latencies):
                 fig_hist = px.histogram(x=latencies, nbins=30,
-                                        labels={"x": "Latency (ms)", "y": "Queries"},
-                                        color_discrete_sequence=["#7c3aed"], template="plotly_white")
+                    labels={"x": "Latency (ms)", "y": "Queries"},
+                    color_discrete_sequence=["#7c3aed"], template="plotly_white")
                 fig_hist.update_layout(**PT, height=300, xaxis_title="Latency (ms)", yaxis_title="Count")
                 st.plotly_chart(fig_hist, use_container_width=True)
             else:
@@ -1559,8 +1874,8 @@ def page_analytics():
                 reason_cnt = df_fail["reason"].value_counts().reset_index()
                 reason_cnt.columns = ["reason", "count"]
                 fig_fail = px.pie(reason_cnt, names="reason", values="count",
-                                  hole=0.42, template="plotly_white",
-                                  color_discrete_sequence=["#ef4444","#f59e0b","#94a3b8","#3b82f6"])
+                    hole=0.42, template="plotly_white",
+                    color_discrete_sequence=["#ef4444","#f59e0b","#94a3b8","#3b82f6"])
                 fig_fail.update_layout(**PT, height=300)
                 st.plotly_chart(fig_fail, use_container_width=True)
             else:
@@ -1587,13 +1902,16 @@ def page_analytics():
                 marker=dict(size=7, color="#7c3aed"),
             ))
             fig_trend.add_hline(y=10, line_dash="dash", line_color="#ef4444",
-                                annotation_text="Target 10s", annotation_position="top right")
+                annotation_text="Target 10s", annotation_position="top right")
             fig_trend.update_layout(**PT, height=300, xaxis_title="", yaxis_title="Seconds",
-                                    yaxis=dict(rangemode="tozero"))
+                yaxis=dict(rangemode="tozero"))
             st.plotly_chart(fig_trend, use_container_width=True)
         else:
             st.info("Not enough data for trend chart yet — run some queries to populate it.")
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 2 — QUALITY  (PATCHED: error_message fix + NEW LLM/Rule chart)
+    # ══════════════════════════════════════════════════════════════════════════
     with tabs[2]:
         st.markdown("#### Quality")
 
@@ -1603,16 +1921,20 @@ def page_analytics():
             stacked = df_14d_q.groupby(["day", "outcome"]).size().reset_index(name="count")
             color_map = {"Success": "#2ecc71", "Failed": "#e74c3c", "Refused": "#95a5a6"}
             fig_stack = px.bar(stacked, x="day", y="count", color="outcome",
-                               title="Query outcome breakdown per day (last 14 days)",
-                               color_discrete_map=color_map, barmode="stack", template="plotly_white")
+                title="Query outcome breakdown per day (last 14 days)",
+                color_discrete_map=color_map, barmode="stack", template="plotly_white")
             fig_stack.update_layout(**PT, height=340, xaxis_title="", yaxis_title="Queries")
             st.plotly_chart(fig_stack, use_container_width=True)
         else:
             st.info("No data yet.")
 
         st.markdown("---")
+
+        # ── FIX 5: LLM vs Rule parse-method breakdown ─────────────────────────
         st.markdown("#### Parse Method — LLM vs Rule-based (7d)")
         if not df_7d.empty and len(latencies) > 0:
+            # Heuristic: LLM adds Ollama network RTT (~200-2000ms extra).
+            # Queries with latency > 1.5× median are classified as LLM-parsed.
             median_ms = float(np.median(latencies))
             df_method = df_7d.copy()
             df_method["parse_method"] = df_method["latency_ms"].apply(
@@ -1624,38 +1946,44 @@ def page_analytics():
             pm_c1, pm_c2 = st.columns([3, 2])
             with pm_c1:
                 fig_method = px.pie(method_cnt, names="method", values="count",
-                                    color="method",
-                                    color_discrete_map={"🤖 LLM": "#7c3aed", "⚙️ Rule-based": "#10b981"},
-                                    hole=0.50, template="plotly_white",
-                                    title="Parse method split (7d — latency heuristic)")
+                    color="method",
+                    color_discrete_map={"🤖 LLM": "#7c3aed", "⚙️ Rule-based": "#10b981"},
+                    hole=0.50, template="plotly_white",
+                    title="Parse method split (7d — latency heuristic)")
                 fig_method.update_layout(**PT, height=280)
                 st.plotly_chart(fig_method, use_container_width=True)
             with pm_c2:
-                llm_cnt = int(method_cnt.loc[method_cnt["method"]=="🤖 LLM","count"].sum()) if "🤖 LLM" in method_cnt["method"].values else 0
+                llm_cnt  = int(method_cnt.loc[method_cnt["method"]=="🤖 LLM","count"].sum()) if "🤖 LLM" in method_cnt["method"].values else 0
                 rule_cnt = int(method_cnt.loc[method_cnt["method"]=="⚙️ Rule-based","count"].sum()) if "⚙️ Rule-based" in method_cnt["method"].values else 0
-                st.metric("🤖 LLM queries (est.)", f"{llm_cnt:,}")
+                st.metric("🤖 LLM queries (est.)",        f"{llm_cnt:,}")
                 st.metric("⚙️ Rule-based queries (est.)", f"{rule_cnt:,}")
-                st.caption("Heuristic: latency > 1.5× session median → LLM (Ollama adds network overhead). Enable Ollama in sidebar and run queries to see a real split.")
+                st.caption(
+                    "Heuristic: latency > 1.5× session median → LLM (Ollama adds network overhead). "
+                    "Enable Ollama in sidebar and run queries to see a real split."
+                )
         else:
             st.info("No query data for parse method breakdown yet — run some queries in Chat first.")
 
         st.markdown("---")
         st.markdown("#### User Feedback (30 days)")
         fb_c1, fb_c2, fb_c3 = st.columns(3)
-        fb_c1.metric("👍 Thumbs up", str(ups))
+        fb_c1.metric("👍 Thumbs up",   str(ups))
         fb_c2.metric("👎 Thumbs down", str(downs))
-        fb_c3.metric("Ratio", ratio_str)
+        fb_c3.metric("Ratio",          ratio_str)
 
         if not df_fb30.empty and total_fb:
             fig_fb = px.pie(df_fb30, names="feedback_type", values="cnt",
-                            color="feedback_type",
-                            color_discrete_map={"thumbs_up":"#2ecc71","thumbs_down":"#ef4444"},
-                            hole=0.5, template="plotly_white", title="Feedback split")
+                color="feedback_type",
+                color_discrete_map={"thumbs_up":"#2ecc71","thumbs_down":"#ef4444"},
+                hole=0.5, template="plotly_white", title="Feedback split")
             fig_fb.update_layout(**PT, height=280)
             st.plotly_chart(fig_fb, use_container_width=True)
         else:
             st.info("No feedback yet — use 👍 / 👎 in Chat to record feedback.")
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 3 — ADOPTION
+    # ══════════════════════════════════════════════════════════════════════════
     with tabs[3]:
         st.markdown("#### Adoption")
 
@@ -1675,8 +2003,8 @@ def page_analytics():
         """)
         if not df_sess.empty:
             fig_sess = px.bar(df_sess, x="day", y="sessions",
-                              title="New sessions per day (last 14 days)",
-                              color_discrete_sequence=["#7c3aed"], template="plotly_white")
+                title="New sessions per day (last 14 days)",
+                color_discrete_sequence=["#7c3aed"], template="plotly_white")
             fig_sess.update_layout(**PT, height=300, xaxis_title="", yaxis_title="Sessions")
             st.plotly_chart(fig_sess, use_container_width=True)
         else:
@@ -1692,10 +2020,10 @@ def page_analytics():
             top_intent.columns = ["intent", "count"]
             if not top_intent.empty:
                 fig_intent = px.bar(top_intent, x="count", y="intent", orientation="h",
-                                    title="", color_discrete_sequence=["#7c3aed"], template="plotly_white")
+                    title="", color_discrete_sequence=["#7c3aed"], template="plotly_white")
                 fig_intent.update_layout(**PT,
-                                         height=max(260, len(top_intent) * 36 + 60),
-                                         yaxis=dict(autorange="reversed"), xaxis_title="Queries", yaxis_title="")
+                    height=max(260, len(top_intent) * 36 + 60),
+                    yaxis=dict(autorange="reversed"), xaxis_title="Queries", yaxis_title="")
                 st.plotly_chart(fig_intent, use_container_width=True)
             else:
                 st.info("No intent data yet.")
@@ -1709,16 +2037,19 @@ def page_analytics():
             ct_cnt.columns = ["chart_type", "count"]
             if not ct_cnt.empty:
                 fig_ct = px.pie(ct_cnt, names="chart_type", values="count",
-                                hole=0.42, template="plotly_white",
-                                color_discrete_sequence=PT["colorway"])
+                    hole=0.42, template="plotly_white",
+                    color_discrete_sequence=PT["colorway"])
                 fig_ct.update_layout(**PT, height=280)
                 st.plotly_chart(fig_ct, use_container_width=True)
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 4 — KPI TRACKER
+    # ══════════════════════════════════════════════════════════════════════════
     with tabs[4]:
         st.markdown("#### KPI Tracker")
 
         failed_rate = 100.0 - success_r
-        qpu_val = round(total_q / wau, 1) if wau else 0.0
+        qpu_val     = round(total_q / wau, 1) if wau else 0.0
 
         def _status(actual, target, higher_is_better=True):
             ok = actual >= target if higher_is_better else actual <= target
@@ -1746,8 +2077,6 @@ def page_analytics():
         st.markdown("---")
         st.caption(f"All metrics computed live from `query_log` · `feedback` · `user_session` · refreshed on page load · last updated {datetime.now().strftime('%H:%M · %d %b %Y')}")
 
-
-# ══════════════════════════════════════════════════════════════════════════════
 # ROUTER
 # ══════════════════════════════════════════════════════════════════════════════
 {
