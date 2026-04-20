@@ -299,14 +299,6 @@ def exp_tag(days) -> str:
 def bool_icon(v) -> str:
     return "✅" if v in (1, "1", True, "Yes", "yes") else "❌"
 
-def match_method_badge(method: str) -> str:
-    if method == "llm":
-        return '<span style="background:#7c3aed; color:white; border-radius:12px; padding:2px 8px; font-size:11px; font-weight:600; margin-left:6px;">🤖 LLM</span>'
-    elif method == "rule":
-        return '<span style="background:#475569; color:white; border-radius:12px; padding:2px 8px; font-size:11px; font-weight:600; margin-left:6px;">📜 Rule</span>'
-    else:
-        return ''
-
 def stat_tiles(items: list):
     for col, (val, lbl, color) in zip(st.columns(len(items)), items):
         col.markdown(
@@ -891,8 +883,6 @@ def page_chat():
             if msg.get("chart"):
                 st.plotly_chart(msg["chart"], use_container_width=True, key=f"hchart_{i}")
             st.markdown(msg.get("answer","Here are the results:"))
-            # Show method badge in history
-            st.markdown(match_method_badge(msg.get("match_method", "rule")), unsafe_allow_html=True)
             if msg.get("data") is not None and not msg["data"].empty:
                 st.dataframe(msg["data"], use_container_width=True, hide_index=True, height=280)
                 st.download_button("📥 CSV", msg["data"].to_csv(index=False), f"query_{i}.csv","text/csv",key=f"dl_h_{i}")
@@ -978,7 +968,7 @@ def page_chat():
                         if fig: st.plotly_chart(fig, use_container_width=True)
 
                         answer_txt = f"📊 **{len(res_df):,} records** for **{region_ctx}**." + (" Sorted by expiry." if "expir" in active_prompt.lower() else "")
-                        st.markdown(answer_txt + match_method_badge(intent.match_method), unsafe_allow_html=True)
+                        st.markdown(answer_txt)
                         st.dataframe(res_df, use_container_width=True, hide_index=True, height=300)
                         st.download_button("📥 Download CSV", res_df.to_csv(index=False), f"rights_query_{region_ctx}.csv","text/csv",key="dl_live")
 
@@ -1004,7 +994,6 @@ def page_chat():
                             "metrics": metrics_data, "sql": sql,
                             "region": region_ctx, "chips": intent.chips,
                             "log_id": log_id,
-                            "match_method": intent.match_method,
                         })
                     else:
                         st.warning("No records returned — try removing a chip filter or rewording your query.")
@@ -1555,7 +1544,7 @@ def page_custom_dashboard():
             else:
                 st.session_state.dashboard_last_df   = res_df.copy()
                 st.session_state.dashboard_last_meta = {"query":query_text.strip(),"sql":sql,"chart_type":chart_type,"region":region_ctx,"intent":intent}
-                st.markdown(f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="font-size:.85rem;font-weight:700;color:#0f172a">📊 {len(res_df):,} records · {region_ctx}</span><span class="db-query-pill">chart: {chart_type}</span>{match_method_badge(intent.match_method)}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="font-size:.85rem;font-weight:700;color:#0f172a">📊 {len(res_df):,} records · {region_ctx}</span><span class="db-query-pill">chart: {chart_type}</span></div>', unsafe_allow_html=True)
                 render_dynamic_dashboard(res_df.copy(), chart_type, query_text.strip(), key_prefix="live", show_save_button=True)
                 if export_on:
                     st.download_button("📥 Download full CSV", res_df.to_csv(index=False), f"dashboard_{region_ctx}.csv","text/csv",key="db_dl_full")
