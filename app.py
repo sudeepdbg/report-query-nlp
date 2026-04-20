@@ -366,12 +366,23 @@ with st.sidebar:
                  index=_personas.index(st.session_state.persona) if st.session_state.persona in _personas else 0,
                  key="_per_sel", on_change=_on_persona)
     
-    # ─── LLM toggle ────────────────────────────────────────────────────────
+    # ─── LLM toggle + status ───────────────────────────────────────────────
     llm_enabled = st.checkbox("🤖 Use LLM (Ollama)", value=st.session_state.llm_enabled)
     if llm_enabled != st.session_state.llm_enabled:
         st.session_state.llm_enabled = llm_enabled
         query_pipeline.USE_LLM = llm_enabled
         st.rerun()
+    # Live LLM status — updated after every query
+    _llm_status = query_pipeline.LLM_LAST_STATUS
+    if _llm_status["success"] is True:
+        st.markdown("""<div style="margin:4px 0 0;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);
+border-radius:6px;padding:4px 8px;font-size:.68rem;color:#6ee7b7">✅ Ollama OK — last query LLM-parsed</div>""", unsafe_allow_html=True)
+    elif _llm_status["success"] is False:
+        st.markdown(f"""<div style="margin:4px 0 0;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);
+border-radius:6px;padding:4px 8px;font-size:.68rem;color:#fca5a5">⚠ Ollama: {_llm_status["error"]}</div>""", unsafe_allow_html=True)
+    else:
+        st.markdown("""<div style="margin:4px 0 0;background:rgba(100,116,139,.1);border:1px solid rgba(100,116,139,.2);
+border-radius:6px;padding:4px 8px;font-size:.68rem;color:#94a3b8">⏸ No query run yet</div>""", unsafe_allow_html=True)
     
     st.markdown('</div>', unsafe_allow_html=True)
 
