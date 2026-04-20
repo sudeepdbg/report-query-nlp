@@ -19,6 +19,12 @@ import numpy as np
 from datetime import datetime
 import logging
 from typing import Optional
+# ─── Hybrid LLM toggle initialisation ──────────────────────────────────────
+import query_pipeline
+
+if "llm_enabled" not in st.session_state:
+    st.session_state.llm_enabled = True
+query_pipeline.USE_LLM = st.session_state.llm_enabled
 
 from utils.database import (
     init_database, execute_sql, get_table_stats,
@@ -349,17 +355,24 @@ with st.sidebar:
     st.markdown('<hr style="border:none;border-top:1px solid rgba(255,255,255,.05);margin:8px 16px">', unsafe_allow_html=True)
 
     st.markdown('<div style="padding:0 8px">', unsafe_allow_html=True)
-    _regions = ["NA","APAC","EMEA","LATAM"]
-    def _on_region(): st.session_state.current_region = st.session_state._reg_sel
-    st.selectbox("Region / Market", _regions, index=_regions.index(st.session_state.current_region),
-                 key="_reg_sel", on_change=_on_region)
-    _personas = ["Business Affairs","Strategy","Legal","Operations","Analytics"]
-    def _on_persona(): st.session_state.persona = st.session_state._per_sel
-    st.selectbox("Persona", _personas,
-                 index=_personas.index(st.session_state.persona) if st.session_state.persona in _personas else 0,
-                 key="_per_sel", on_change=_on_persona)
-    st.markdown('</div>', unsafe_allow_html=True)
+_regions = ["NA", "APAC", "EMEA", "LATAM"]
+def _on_region(): st.session_state.current_region = st.session_state._reg_sel
+st.selectbox("Region / Market", _regions, index=_regions.index(st.session_state.current_region),
+             key="_reg_sel", on_change=_on_region)
+_personas = ["Business Affairs","Strategy","Legal","Operations","Analytics"]
+def _on_persona(): st.session_state.persona = st.session_state._per_sel
+st.selectbox("Persona", _personas,
+             index=_personas.index(st.session_state.persona) if st.session_state.persona in _personas else 0,
+             key="_per_sel", on_change=_on_persona)
 
+# LLM toggle
+llm_enabled = st.checkbox("🤖 Use LLM (Ollama)", value=st.session_state.llm_enabled)
+if llm_enabled != st.session_state.llm_enabled:
+    st.session_state.llm_enabled = llm_enabled
+    query_pipeline.USE_LLM = llm_enabled
+    st.rerun()
+
+st.markdown('</div>', unsafe_allow_html=True)   # ← only one closing div, no extra bracket
     stats = st.session_state.db_stats
     alerts_live, _ = get_alerts(DB_CONN, region=st.session_state.current_region)
     st.session_state.alerts_count = len(alerts_live) if alerts_live is not None else 0
