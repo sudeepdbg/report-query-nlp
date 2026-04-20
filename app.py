@@ -883,7 +883,6 @@ def page_chat():
             if msg.get("chart"):
                 st.plotly_chart(msg["chart"], use_container_width=True, key=f"hchart_{i}")
             st.markdown(msg.get("answer","Here are the results:"))
-            st.markdown(match_method_badge(msg.get("match_method", "rule")), unsafe_allow_html=True)
             if msg.get("data") is not None and not msg["data"].empty:
                 st.dataframe(msg["data"], use_container_width=True, hide_index=True, height=280)
                 st.download_button("📥 CSV", msg["data"].to_csv(index=False), f"query_{i}.csv","text/csv",key=f"dl_h_{i}")
@@ -969,7 +968,7 @@ def page_chat():
                         if fig: st.plotly_chart(fig, use_container_width=True)
 
                         answer_txt = f"📊 **{len(res_df):,} records** for **{region_ctx}**." + (" Sorted by expiry." if "expir" in active_prompt.lower() else "")
-st.markdown(answer_txt + match_method_badge(intent.match_method), unsafe_allow_html=True)
+                        st.markdown(answer_txt)
                         st.dataframe(res_df, use_container_width=True, hide_index=True, height=300)
                         st.download_button("📥 Download CSV", res_df.to_csv(index=False), f"rights_query_{region_ctx}.csv","text/csv",key="dl_live")
 
@@ -995,7 +994,6 @@ st.markdown(answer_txt + match_method_badge(intent.match_method), unsafe_allow_h
                             "metrics": metrics_data, "sql": sql,
                             "region": region_ctx, "chips": intent.chips,
                             "log_id": log_id,
-                           "match_method": intent.match_method,   # <-- add this line
                         })
                     else:
                         st.warning("No records returned — try removing a chip filter or rewording your query.")
