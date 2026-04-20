@@ -298,13 +298,7 @@ def exp_tag(days) -> str:
 
 def bool_icon(v) -> str:
     return "✅" if v in (1, "1", True, "Yes", "yes") else "❌"
-def match_method_badge(method: str) -> str:
-    if method == "llm":
-        return '<span style="background:#7c3aed; color:white; border-radius:12px; padding:2px 8px; font-size:11px; font-weight:600; margin-left:6px;">🤖 LLM</span>'
-    elif method == "rule":
-        return '<span style="background:#475569; color:white; border-radius:12px; padding:2px 8px; font-size:11px; font-weight:600; margin-left:6px;">📜 Rule</span>'
-    else:
-        return ''
+
 def stat_tiles(items: list):
     for col, (val, lbl, color) in zip(st.columns(len(items)), items):
         col.markdown(
