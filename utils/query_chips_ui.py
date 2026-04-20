@@ -2,16 +2,22 @@
 query_chips_ui.py — Enhancement 4: SQL Logic Chips UI
 Renders parsed QueryIntent as interactive editable chips/facets.
 Users can remove a chip or edit a value → query reruns automatically.
+
+FIXES (v5.1):
+  - chips_query_block now correctly re-uses a cached intent's match_method
+    so the LLM/rule badge in the chat page stays accurate after chip edits.
+  - When ↺ Reset filters rebuilds intent via preprocess(), the match_method
+    is preserved from the original parse (reset only resets filters, not the
+    parsing method).
 """
 from __future__ import annotations
-# Add this line to the imports in query_chips_ui.py
-from query_pipeline import parse_query
 import copy
 import streamlit as st
 from typing import Optional
+
 from query_pipeline import (
     QueryIntent, DateFilter,
-    preprocess, generate, validate,
+    parse_query, preprocess, generate, validate,
     REGION_CANONICAL, ALL_MEDIA,
 )
 
@@ -38,15 +44,15 @@ _CHIPS_CSS = """
 """
 
 _KIND_CLASS = {
-    "domain": "chip chip-domain",
-    "cross_intent": "chip chip-cross",
-    "region": "chip chip-region",
-    "platform": "chip chip-platform",
-    "date": "chip chip-date",
-    "expiry_days": "chip chip-expiry",
-    "status": "chip chip-status",
-    "title": "chip chip-title",
-    "movie_category": "chip chip-category",
+    "domain":        "chip chip-domain",
+    "cross_intent":  "chip chip-cross",
+    "region":        "chip chip-region",
+    "platform":      "chip chip-platform",
+    "date":          "chip chip-date",
+    "expiry_days":   "chip chip-expiry",
+    "status":        "chip chip-status",
+    "title":         "chip chip-title",
+    "movie_category":"chip chip-category",
 }
 
 def _inject_css():
@@ -194,7 +200,11 @@ def render_chips(intent: QueryIntent, key_prefix: str = "chips", on_change_rerun
     with cols[-1]:
         st.markdown('<div style="margin-top:18px"></div>', unsafe_allow_html=True)
         if st.button("↺ Reset filters", key=f"{key_prefix}_reset_all", help="Rerun original query"):
+            # Reset filters via preprocess but PRESERVE the original match_method so
+            # the LLM/rule badge stays accurate.
+            original_method = intent.match_method
             new_intent = preprocess(intent.raw_question, intent.regions[0] if intent.regions else "NA")
+            new_intent.match_method = original_method
             changed_intent = new_intent
 
     if changed_intent is not None:
@@ -204,24 +214,38 @@ def render_chips(intent: QueryIntent, key_prefix: str = "chips", on_change_rerun
         return changed_intent
     return None
 
-def chips_query_block(question: str, selected_region: str, key_prefix: str = "chips", show_sql: bool = True) -> tuple[str, Optional[str], str, str, QueryIntent]:
+
+def chips_query_block(
+    question: str,
+    selected_region: str,
+    key_prefix: str = "chips",
+    show_sql: bool = True,
+) -> tuple[str, Optional[str], str, str, QueryIntent]:
+    """
+    Full 3-stage pipeline with chip UI.
+    Returns (sql, error, chart_type, region_ctx, intent).
+    intent.match_method is "llm" or "rule" — callers use this to render a badge.
+    """
+    import html as _html
+
     stored_intent: Optional[QueryIntent] = st.session_state.get(f"chips_{key_prefix}")
     if stored_intent and stored_intent.raw_question == question:
+        # Re-use cached intent (chip edit already applied); match_method preserved.
         intent = stored_intent
     else:
+        # Fresh parse — match_method set by parse_query (llm or rule).
         sql, err, chart_type, region_ctx, intent = parse_query(question, selected_region)
         if err:
             return sql, err, chart_type, region_ctx, intent
 
     render_chips(intent, key_prefix=key_prefix, on_change_rerun=True)
-    
+
     sql, gen_err, chart_type = generate(intent)
     sql, val_err = validate(sql, intent)
     err = gen_err or val_err
     region_ctx = " vs ".join(intent.regions) if len(intent.regions) > 1 else intent.regions[0]
 
     if show_sql and sql:
-        import html
-        st.markdown(f'<div class="sql-box">{html.escape(sql)}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sql-box">{_html.escape(sql)}</div>', unsafe_allow_html=True)
 
     return sql, err, chart_type, region_ctx, intent
