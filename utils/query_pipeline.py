@@ -345,11 +345,7 @@ def parse_with_llm(question: str, selected_region: str) -> Optional[QueryIntent]
     base.chips = _build_chips(base)
     return base
 
-# ========== Stage 2: SQL Generation (rule‑based, unchanged) ==========
-# The entire original generate() function follows, exactly as provided.
-# It is too long to inline here in the explanation, but it is included in the final file.
-# I will copy it verbatim from the user's original query_pipeline (4).py.
-
+# ========== Stage 2: SQL Generation (unchanged, rule‑based) ==========
 def _rw(regions: list[str], col: str = "region") -> str:
     if not regions: return "1=1"
     if len(regions) == 1: return f"UPPER({col}) = '{regions[0]}'"
@@ -381,7 +377,7 @@ def _build_where(*parts) -> str:
     cleaned = [p.strip() for p in parts if p and p.strip() and p.strip() not in ("1=1","AND 1=1")]
     return " AND ".join(cleaned) if cleaned else "1=1"
 
-# --- START OF ORIGINAL generate() ---
+# ========== FULL ORIGINAL generate() FUNCTION (rule‑based) ==========
 def generate(intent: QueryIntent) -> tuple[str, Optional[str], str]:
     q  = intent.normalised
     r  = intent.regions
@@ -748,7 +744,6 @@ def generate(intent: QueryIntent) -> tuple[str, Optional[str], str]:
         FROM media_rights mr WHERE {rw_mr} {stat_f} {plat_f} ORDER BY mr.term_to DESC LIMIT 100
     """
     return sql.strip(), None, 'table'
-# --- END OF ORIGINAL generate() ---
 
 # ========== Stage 3: Validation (unchanged) ==========
 _ALLOWED_COLS = {
