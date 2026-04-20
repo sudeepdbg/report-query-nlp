@@ -2,6 +2,12 @@
 query_pipeline.py — Foundry Vantage NL Query Pipeline
 Hybrid: Stage 1 uses LLM (Ollama) with fallback to rule‑based intent parsing.
 Stage 2 (generate) and Stage 3 (validate) remain deterministic rule‑based.
+
+FIXES (v5.1):
+  - parse_query() no longer overwrites intent.match_method after a successful
+    LLM call — the value set by parse_with_llm() ("llm") is now preserved.
+  - parse_query() returns the intent with match_method correctly set so the
+    UI can display an LLM vs Rule badge.
 """
 from __future__ import annotations
 import re
@@ -11,9 +17,9 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 # ========== LLM Configuration (Ollama, free, local) ==========
-OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_URL   = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "llama3.2:1b"       # free, runs locally
-USE_LLM = True                      # can be toggled from app.py
+USE_LLM      = True                # can be toggled from app.py
 
 # ========== Existing Vocabulary / Ontology (unchanged) ==========
 DNA_KW       = {"do not air", "do-not-air", "dna", "restrict", "banned", "blocked", "not allowed"}
@@ -67,7 +73,7 @@ KNOWN_TITLES = [
     "Godzilla vs. Kong",
 ]
 
-# ─── STAGE 1: QueryIntent Dataclass (added match_method) ─────────────────────
+# ─── STAGE 1: QueryIntent Dataclass ──────────────────────────────────────────
 @dataclass
 class DateFilter:
     kind: str
@@ -77,28 +83,28 @@ class DateFilter:
 
 @dataclass
 class QueryIntent:
-    raw_question:  str
-    normalised:    str
+    raw_question:   str
+    normalised:     str
     regions:        list[str]
-    platforms:     list[str]
-    title_hint:    Optional[str]
-    date_filter:   Optional[DateFilter]
-    expiry_days:   Optional[int]
-    status_filter: Optional[str]
-    movie_category:Optional[str]
-    domain:        str
-    cross_intent:  Optional[str]
-    has_movie:     bool = False
-    has_rights:    bool = False
+    platforms:      list[str]
+    title_hint:     Optional[str]
+    date_filter:    Optional[DateFilter]
+    expiry_days:    Optional[int]
+    status_filter:  Optional[str]
+    movie_category: Optional[str]
+    domain:         str
+    cross_intent:   Optional[str]
+    has_movie:      bool = False
+    has_rights:     bool = False
     has_dna:        bool = False
-    has_sales:     bool = False
-    has_work:      bool = False
-    has_expiry:    bool = False
-    has_title:     bool = False
-    has_deal_word: bool = False
-    has_rights_word:bool= False
-    chips: list[dict] = field(default_factory=list)
-    match_method: str = "rule"      # NEW: "llm" or "rule"
+    has_sales:      bool = False
+    has_work:       bool = False
+    has_expiry:     bool = False
+    has_title:      bool = False
+    has_deal_word:  bool = False
+    has_rights_word:bool = False
+    chips:          list[dict] = field(default_factory=list)
+    match_method:   str = "rule"      # "llm" or "rule"
 
 # ========== Existing Helper Functions (unchanged) ==========
 def _apply_ontology(q: str) -> str:
@@ -167,15 +173,14 @@ def _extract_movie_category(q: str) -> Optional[str]:
 
 def _detect_cross_intent(intent: "QueryIntent") -> Optional[str]:
     i = intent
-    if i.has_movie and i.has_dna:                              return "movie_dna"
-    if i.has_movie and i.has_sales:                            return "movie_sales"
+    if i.has_movie and i.has_dna:                               return "movie_dna"
+    if i.has_movie and i.has_sales:                             return "movie_sales"
     if (i.has_movie or i.has_title) and i.has_rights and i.has_dna:
         return "title_health"
-    if i.has_expiry and i.has_sales:                           return "expiry_sales"
-    if i.has_work and (i.has_rights or i.has_title):           return "workorder_rights"
-    if i.has_title and i.has_sales:                            return "title_sales"
-    # Re‑enabled deals_rights – now uses content_deal (valid join)
-    if i.has_deal_word and i.has_rights_word:                  return "deals_rights"
+    if i.has_expiry and i.has_sales:                            return "expiry_sales"
+    if i.has_work and (i.has_rights or i.has_title):            return "workorder_rights"
+    if i.has_title and i.has_sales:                             return "title_sales"
+    if i.has_deal_word and i.has_rights_word:                   return "deals_rights"
     return None
 
 def _detect_domain(q: str, intent: "QueryIntent") -> str:
@@ -244,8 +249,8 @@ def preprocess(question: str, selected_region: str) -> QueryIntent:
     has_work     = any(kw in q for kw in WORK_KW) or "work order" in q
     has_expiry   = any(kw in q for kw in EXPIRY_KW)
     has_title    = any(kw in q for kw in TITLE_KW) or has_movie
-    has_deal_word  = any(kw in q for kw in {"deal", "deals", "contract", "contracts", "agreement"})
-    has_rights_word= any(kw in q for kw in {"rights", "license", "licensed", "window", "windows"})
+    has_deal_word   = any(kw in q for kw in {"deal", "deals", "contract", "contracts", "agreement"})
+    has_rights_word = any(kw in q for kw in {"rights", "license", "licensed", "window", "windows"})
 
     intent = QueryIntent(
         raw_question   = question, normalised = q_norm, regions = regions, platforms = platforms,
@@ -269,7 +274,11 @@ def preprocess(question: str, selected_region: str) -> QueryIntent:
 def call_ollama(prompt: str) -> Optional[str]:
     """Send prompt to Ollama, return response text or None on failure."""
     try:
-        resp = requests.post(OLLAMA_URL, json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}, timeout=15)
+        resp = requests.post(
+            OLLAMA_URL,
+            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
+            timeout=15,
+        )
         if resp.status_code == 200:
             return resp.json().get("response", "").strip()
     except Exception:
@@ -324,14 +333,14 @@ def parse_with_llm(question: str, selected_region: str) -> Optional[QueryIntent]
     # Build base intent using rule‑based preprocess (to get boolean flags, chips, etc.)
     base = preprocess(question, selected_region)
     # Override fields from LLM
-    base.domain = data.get("domain", base.domain)
-    base.cross_intent = data.get("cross_intent")
-    base.regions = data.get("regions") or [selected_region]
-    base.platforms = data.get("platforms") or []
-    base.title_hint = data.get("title_hint")
-    base.expiry_days = data.get("expiry_days")
+    base.domain        = data.get("domain", base.domain)
+    base.cross_intent  = data.get("cross_intent")
+    base.regions       = data.get("regions") or [selected_region]
+    base.platforms     = data.get("platforms") or []
+    base.title_hint    = data.get("title_hint")
+    base.expiry_days   = data.get("expiry_days")
     base.status_filter = data.get("status_filter")
-    base.movie_category = data.get("movie_category")
+    base.movie_category= data.get("movie_category")
     df = data.get("date_filter")
     if df and isinstance(df, dict):
         base.date_filter = DateFilter(
@@ -342,6 +351,7 @@ def parse_with_llm(question: str, selected_region: str) -> Optional[QueryIntent]
         )
     else:
         base.date_filter = None
+    # ── FIX: mark as LLM AFTER all overrides ─────────────────────────────────
     base.match_method = "llm"
     base.chips = _build_chips(base)
     return base
@@ -384,7 +394,7 @@ def generate(intent: QueryIntent) -> tuple[str, Optional[str], str]:
     r  = intent.regions
     p  = intent.platforms
     th = intent.title_hint
-    
+
     rw       = _rw(r)
     rw_mr    = _rw(r, "mr.region")
     rw_t     = _rw(r, "t.region")
@@ -402,10 +412,9 @@ def generate(intent: QueryIntent) -> tuple[str, Optional[str], str]:
 
     # ========== FIXED: deals_rights using content_deal + media_rights ==========
     if ci == "deals_rights":
-        # Determine if the user wants a summary (counts) or detailed table
         if any(kw in q for kw in ["breakdown", "summary", "count", "how many", "by region", "compare", "overview"]):
             sql = f"""
-                SELECT cd.region, 
+                SELECT cd.region,
                        COUNT(DISTINCT cd.deal_id) AS deal_count,
                        COUNT(DISTINCT mr.rights_id) AS rights_count,
                        COUNT(DISTINCT mr.title_id) AS titles_covered,
@@ -418,7 +427,6 @@ def generate(intent: QueryIntent) -> tuple[str, Optional[str], str]:
             """
             return sql.strip(), None, 'bar'
         else:
-            # Detailed table
             sql = f"""
                 SELECT cd.deal_id, cd.deal_name, cd.deal_source, cd.deal_type, cd.region AS deal_region,
                        mr.title_name, mr.rights_type, mr.media_platform_primary,
@@ -433,7 +441,7 @@ def generate(intent: QueryIntent) -> tuple[str, Optional[str], str]:
             """
             return sql.strip(), None, 'table'
 
-    # ========== Other cross-intents (unchanged) ==========
+    # ========== Other cross-intents ==========
     if ci == "title_health":
         tf = f"AND {_title_like(th,'t.title_name')}" if th else ""
         sql = f"""
@@ -455,7 +463,7 @@ def generate(intent: QueryIntent) -> tuple[str, Optional[str], str]:
 
     if ci == "expiry_sales":
         sql = f"""
-            SELECT mr.title_name, mr.media_platform_primary AS rights_platform, mr.territories, 
+            SELECT mr.title_name, mr.media_platform_primary AS rights_platform, mr.territories,
                    mr.term_to AS rights_expiry, CAST(JULIANDAY(mr.term_to)-JULIANDAY('now') AS INTEGER) AS days_remaining,
                    mr.exclusivity, mr.rights_type, mr.region, sd.buyer AS sold_to, sd.deal_value AS sales_value,
                    sd.media_platform AS sales_platform, sd.term_to AS sales_expiry, sd.status AS sales_status,
@@ -496,7 +504,7 @@ def generate(intent: QueryIntent) -> tuple[str, Optional[str], str]:
     if ci == "movie_sales":
         sql = f"""
             SELECT m.movie_title, m.content_category, m.genre, m.box_office_gross_usd_m AS box_office_usd_m,
-                   sd.buyer, sd.deal_type, sd.media_platform AS sold_platform, sd.territory AS sold_territory, 
+                   sd.buyer, sd.deal_type, sd.media_platform AS sold_platform, sd.territory AS sold_territory,
                    sd.deal_value, sd.currency, sd.term_from AS sale_from, sd.term_to AS sale_to, sd.status AS sale_status,
                    COUNT(DISTINCT mr.rights_id) AS rights_in_count
             FROM movie m JOIN title t ON t.movie_id = m.movie_id
@@ -520,7 +528,7 @@ def generate(intent: QueryIntent) -> tuple[str, Optional[str], str]:
         """
         return sql.strip(), None, 'table'
 
-    # ========== Single‑domain queries (unchanged) ==========
+    # ========== Single‑domain queries ==========
     if any(kw in q for kw in DNA_KW):
         tf = f" AND {_title_like(th,'dna.title_name')}" if th else ""
         sql = f"""
@@ -759,7 +767,7 @@ def generate(intent: QueryIntent) -> tuple[str, Optional[str], str]:
     """
     return sql.strip(), None, 'table'
 
-# ========== Stage 3: Validation (unchanged) ==========
+# ========== Stage 3: Validation ==========
 _ALLOWED_COLS = {
     "deal_id", "deal_name", "vendor_name", "deal_type", "deal_value", "deal_date",
     "expiry_date", "deal_status", "deal_region", "rights_id", "title_name",
@@ -789,11 +797,14 @@ def validate(sql: str, intent: QueryIntent) -> tuple[str, Optional[str]]:
             return sql, f"Invalid region: {r}"
     return sql, None
 
-# ========== Public API (Hybrid parse_query) ==========
+# ========== Public API ==========
 def parse_query(question: str, selected_region: str = "NA") -> tuple[str, Optional[str], str, str, QueryIntent]:
     """
     Hybrid: try LLM first (if USE_LLM is True), fallback to rule‑based preprocess.
     Returns (sql, error, chart_type, region_ctx, intent).
+
+    FIX: intent.match_method is NOT overwritten here — it is set correctly by
+    parse_with_llm() ("llm") or preprocess() ("rule") and preserved as-is.
     """
     try:
         intent = None
@@ -801,7 +812,8 @@ def parse_query(question: str, selected_region: str = "NA") -> tuple[str, Option
             intent = parse_with_llm(question, selected_region)
         if intent is None:
             intent = preprocess(question, selected_region)
-            intent.match_method = "rule"
+            # match_method is already "rule" from preprocess(); no override needed
+
         region_ctx = " vs ".join(intent.regions) if len(intent.regions) > 1 else intent.regions[0]
         sql, gen_err, chart_type = generate(intent)
         if gen_err:
