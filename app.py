@@ -968,7 +968,7 @@ def page_chat():
                         if fig: st.plotly_chart(fig, use_container_width=True)
 
                         answer_txt = f"📊 **{len(res_df):,} records** for **{region_ctx}**." + (" Sorted by expiry." if "expir" in active_prompt.lower() else "")
-                        st.markdown(answer_txt)
+st.markdown(answer_txt + match_method_badge(intent.match_method), unsafe_allow_html=True)
                         st.dataframe(res_df, use_container_width=True, hide_index=True, height=300)
                         st.download_button("📥 Download CSV", res_df.to_csv(index=False), f"rights_query_{region_ctx}.csv","text/csv",key="dl_live")
 
@@ -994,6 +994,7 @@ def page_chat():
                             "metrics": metrics_data, "sql": sql,
                             "region": region_ctx, "chips": intent.chips,
                             "log_id": log_id,
+                           "match_method": intent.match_method,   # <-- add this line
                         })
                     else:
                         st.warning("No records returned — try removing a chip filter or rewording your query.")
