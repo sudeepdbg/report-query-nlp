@@ -1,5 +1,5 @@
 """
-Foundry Vantage — Rights Explorer  v5.0
+Foundry Vantage-  v5.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Pages  : Rights Explorer · Title Catalog · Do-Not-Air · Sales · Deals
          Vendors · Work Orders · Gap Analysis · Compare · Alerts
