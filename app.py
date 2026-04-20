@@ -366,23 +366,12 @@ with st.sidebar:
                  index=_personas.index(st.session_state.persona) if st.session_state.persona in _personas else 0,
                  key="_per_sel", on_change=_on_persona)
     
-    # ─── LLM toggle + status ───────────────────────────────────────────────
+    # ─── LLM toggle ────────────────────────────────────────────────────────
     llm_enabled = st.checkbox("🤖 Use LLM (Ollama)", value=st.session_state.llm_enabled)
     if llm_enabled != st.session_state.llm_enabled:
         st.session_state.llm_enabled = llm_enabled
         query_pipeline.USE_LLM = llm_enabled
         st.rerun()
-    # Live LLM status — updated after every query
-    _llm_status = query_pipeline.LLM_LAST_STATUS
-    if _llm_status["success"] is True:
-        st.markdown("""<div style="margin:4px 0 0;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);
-border-radius:6px;padding:4px 8px;font-size:.68rem;color:#6ee7b7">✅ Ollama OK — last query LLM-parsed</div>""", unsafe_allow_html=True)
-    elif _llm_status["success"] is False:
-        st.markdown(f"""<div style="margin:4px 0 0;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);
-border-radius:6px;padding:4px 8px;font-size:.68rem;color:#fca5a5">⚠ Ollama: {_llm_status["error"]}</div>""", unsafe_allow_html=True)
-    else:
-        st.markdown("""<div style="margin:4px 0 0;background:rgba(100,116,139,.1);border:1px solid rgba(100,116,139,.2);
-border-radius:6px;padding:4px 8px;font-size:.68rem;color:#94a3b8">⏸ No query run yet</div>""", unsafe_allow_html=True)
     
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -804,33 +793,7 @@ def page_work_orders():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LLM / RULE BADGE HELPER  ◄── must be defined BEFORE page_chat (v5.1)
-# ══════════════════════════════════════════════════════════════════════════════
-def _render_method_badge(match_method: str):
-    """Render a small inline pill showing LLM or Rule-based parse."""
-    if match_method == "llm":
-        st.markdown(
-            '<span style="display:inline-block;background:#ede9fe;border:1px solid #c4b5fd;'
-            'border-radius:20px;padding:2px 10px;font-size:.72rem;font-weight:700;color:#5b21b6;">'
-            '🤖 LLM parsed</span>',
-            unsafe_allow_html=True,
-        )
-    elif match_method == "rule":
-        st.markdown(
-            '<span style="display:inline-block;background:#f0fdf4;border:1px solid #86efac;'
-            'border-radius:20px;padding:2px 10px;font-size:.72rem;font-weight:700;color:#166534;">'
-            '⚙️ Rule parsed</span>',
-            unsafe_allow_html=True,
-        )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# CHAT / QUERY  ◄── 3-stage pipeline + SQL chips  (PATCHED v5.1)
-# FIXES:
-#   1. LLM vs Rule badge rendered after every response
-#   2. Feedback race-condition fixed — rerun moved OUTSIDE button block
-#   3. run_with_logging receives intent.domain (str), not raw intent object
-#   4. match_method + log_id stored in chat_history for history feedback
+# CHAT / QUERY  ◄── integrated with 3-stage pipeline + SQL chips
 # ══════════════════════════════════════════════════════════════════════════════
 def page_chat():
     reg = st.session_state.current_region
@@ -893,13 +856,7 @@ def page_chat():
                         st.plotly_chart(bar(res_df.head(30), res_df.columns[0], fn, "Query Result"), use_container_width=True)
                 st.dataframe(res_df, use_container_width=True, hide_index=True, height=380)
                 st.download_button("📥 CSV", res_df.to_csv(index=False),"raw_sql_result.csv","text/csv",key="dl_raw")
-                st.session_state.chat_history.append({
-                    "question": f"[SQL] {raw_sql_in.strip()[:80]}…",
-                    "answer": f"📊 **{len(res_df):,} records** — raw SQL",
-                    "data": res_df.copy(), "chart": None, "metrics": [],
-                    "sql": raw_sql_in.strip(), "region": reg, "chips": [],
-                    "log_id": None, "match_method": "rule",
-                })
+                st.session_state.chat_history.append({"question":f"[SQL] {raw_sql_in.strip()[:80]}…","answer":f"📊 **{len(res_df):,} records** — raw SQL","data":res_df.copy(),"chart":None,"metrics":[],"sql":raw_sql_in.strip(),"region":reg,"chips":[]})
             else:
                 st.warning("No records returned.")
         st.divider()
@@ -909,12 +866,10 @@ def page_chat():
         with st.chat_message("user"):
             st.markdown(f"**{msg['question']}**  `{msg.get('region','')}`")
         with st.chat_message("assistant", avatar="🔑"):
-            # ── LLM vs Rule badge (history) ───────────────────────────────────
-            _render_method_badge(msg.get("match_method", "rule"))
-
+            # Show chips snapshot (non-interactive — historical view)
             chips = msg.get("chips", [])
             if chips:
-                from utils.query_chips_ui import _KIND_CLASS
+                from query_chips_ui import _KIND_CLASS
                 parts = ['<div class="chip-row"><span class="chip-hint">🔍</span>']
                 for chip in chips:
                     cls = _KIND_CLASS.get(chip["kind"],"chip")
@@ -931,10 +886,7 @@ def page_chat():
             if msg.get("data") is not None and not msg["data"].empty:
                 st.dataframe(msg["data"], use_container_width=True, hide_index=True, height=280)
                 st.download_button("📥 CSV", msg["data"].to_csv(index=False), f"query_{i}.csv","text/csv",key=f"dl_h_{i}")
-
-            # ── Feedback buttons for history entries ─────────────────────────
-            # FIX: set session_state first, then rerun once — avoids race where
-            # st.rerun() inside the button block skips the DB write.
+            # ── Feedback buttons for history entries ──────────────────────────
             msg_log_id = msg.get("log_id")
             if msg_log_id:
                 fb_key = f"fb_{msg_log_id}"
@@ -944,12 +896,12 @@ def page_chat():
                         if st.button("👍", key=f"up_h_{i}_{msg_log_id}", help="Good answer"):
                             log_feedback(DB_CONN, msg_log_id, "thumbs_up")
                             st.session_state[fb_key] = "thumbs_up"
+                            st.rerun()
                     with hfc2:
                         if st.button("👎", key=f"dn_h_{i}_{msg_log_id}", help="Bad answer"):
                             log_feedback(DB_CONN, msg_log_id, "thumbs_down")
                             st.session_state[fb_key] = "thumbs_down"
-                    if fb_key in st.session_state:
-                        st.rerun()
+                            st.rerun()
                 else:
                     icon = "👍" if st.session_state[fb_key] == "thumbs_up" else "👎"
                     st.caption(f"Feedback recorded {icon}")
@@ -968,104 +920,83 @@ def page_chat():
 
         with st.chat_message("assistant", avatar="🔑"):
             with st.spinner("Analysing…"):
+                # ── STAGE 1+2+3 PIPELINE ────────────────────────────────────
                 sql, error, chart_type, region_ctx, intent = chips_query_block(
                     question=active_prompt,
                     selected_region=reg,
                     key_prefix=f"chat_{abs(hash(active_prompt)) % 65536}",
                     show_sql=show_sql,
                 )
+                # chips_query_block renders the chip row + SQL box automatically
 
-            # ── LLM vs Rule badge ─────────────────────────────────────────────
-            _render_method_badge(getattr(intent, "match_method", "rule"))
-
-            if error:
-                st.error(f"❌ {error}")
-            else:
-                # FIX: extract domain as str — never pass raw intent object
-                intent_domain = getattr(intent, "domain", "") or ""
-                cross = bool(getattr(intent, "cross_intent", None))
-
-                res_df, db_err, log_id = run_with_logging(
-                    sql, active_prompt,
-                    intent_domain,
-                    chart_type, region_ctx,
-                    cross_intent=cross,
-                )
-                if db_err:
-                    st.error(f"DB error: {db_err}")
-                elif res_df is not None and not res_df.empty:
-                    # Metric strip
-                    metrics_data = []
-                    val_cols = [c for c in res_df.columns if any(x in c.lower() for x in ["count","total","value","fee","days"])]
-                    if val_cols:
-                        vc = val_cols[0]
-                        try:
-                            res_df[vc] = pd.to_numeric(res_df[vc], errors="coerce")
-                            mc = st.columns(4)
-                            mc[0].metric("Total / Sum", f"{res_df[vc].sum():,.0f}")
-                            mc[1].metric("Avg",         f"{res_df[vc].mean():,.1f}")
-                            mc[2].metric("Records",     f"{len(res_df):,}")
-                            mc[3].metric("Max",         f"{res_df[vc].max():,.0f}")
-                            metrics_data = [
-                                {"label":"Total","value":f"{res_df[vc].sum():,.0f}"},
-                                {"label":"Avg","value":f"{res_df[vc].mean():,.1f}"},
-                                {"label":"Records","value":f"{len(res_df):,}"},
-                                {"label":"Max","value":f"{res_df[vc].max():,.0f}"},
-                            ]
-                        except (ValueError, TypeError): pass
-
-                    # Chart
-                    fig = None
-                    if chart_type == "bar" and len(res_df.columns) >= 2:
-                        x_col = res_df.columns[0]
-                        y_col = next((c for c in res_df.columns[1:] if pd.api.types.is_numeric_dtype(res_df[c])), res_df.columns[1])
-                        try: res_df[y_col] = pd.to_numeric(res_df[y_col], errors="coerce")
-                        except: pass
-                        fig = bar(res_df.head(30), x_col, y_col, active_prompt[:60])
-                    elif chart_type == "pie" and len(res_df.columns) >= 2:
-                        fig = pie(res_df, res_df.columns[0], res_df.columns[1], active_prompt[:60])
-                    if fig: st.plotly_chart(fig, use_container_width=True)
-
-                    answer_txt = (
-                        f"📊 **{len(res_df):,} records** for **{region_ctx}**."
-                        + (" Sorted by expiry." if "expir" in active_prompt.lower() else "")
-                    )
-                    st.markdown(answer_txt)
-                    st.dataframe(res_df, use_container_width=True, hide_index=True, height=300)
-                    st.download_button("📥 Download CSV", res_df.to_csv(index=False), f"rights_query_{region_ctx}.csv","text/csv",key="dl_live")
-
-                    # ── Feedback buttons (live response) ──────────────────────
-                    # FIX: set session_state first, then rerun once outside blocks
-                    if log_id:
-                        fb_key = f"fb_{log_id}"
-                        if fb_key not in st.session_state:
-                            fc1, fc2, _ = st.columns([1, 1, 8])
-                            with fc1:
-                                if st.button("👍", key=f"up_live_{log_id}", help="Good answer"):
-                                    log_feedback(DB_CONN, log_id, "thumbs_up")
-                                    st.session_state[fb_key] = "thumbs_up"
-                            with fc2:
-                                if st.button("👎", key=f"dn_live_{log_id}", help="Bad answer"):
-                                    log_feedback(DB_CONN, log_id, "thumbs_down")
-                                    st.session_state[fb_key] = "thumbs_down"
-                            if fb_key in st.session_state:
-                                st.rerun()
-                        else:
-                            icon = "👍" if st.session_state[fb_key] == "thumbs_up" else "👎"
-                            st.caption(f"Feedback recorded {icon}")
-
-                    # FIX: store log_id AND match_method for history replay
-                    st.session_state.chat_history.append({
-                        "question": active_prompt, "answer": answer_txt,
-                        "data": res_df.copy(), "chart": fig,
-                        "metrics": metrics_data, "sql": sql,
-                        "region": region_ctx, "chips": intent.chips,
-                        "log_id": log_id,
-                        "match_method": getattr(intent, "match_method", "rule"),
-                    })
+                if error:
+                    st.error(f"❌ {error}")
                 else:
-                    st.warning("No records returned — try removing a chip filter or rewording your query.")
+                    res_df, db_err, log_id = run_with_logging(
+                        sql, active_prompt,
+                        intent.domain if hasattr(intent, "domain") else str(intent),
+                        chart_type, region_ctx,
+                    )
+                    if db_err:
+                        st.error(f"DB error: {db_err}")
+                    elif res_df is not None and not res_df.empty:
+                        # Metric strip
+                        metrics_data = []
+                        val_cols = [c for c in res_df.columns if any(x in c.lower() for x in ["count","total","value","fee","days"])]
+                        if val_cols:
+                            vc = val_cols[0]
+                            try:
+                                res_df[vc] = pd.to_numeric(res_df[vc], errors="coerce")
+                                mc = st.columns(4)
+                                mc[0].metric("Total / Sum", f"{res_df[vc].sum():,.0f}")
+                                mc[1].metric("Avg",         f"{res_df[vc].mean():,.1f}")
+                                mc[2].metric("Records",     f"{len(res_df):,}")
+                                mc[3].metric("Max",         f"{res_df[vc].max():,.0f}")
+                                metrics_data = [{"label":"Total","value":f"{res_df[vc].sum():,.0f}"},{"label":"Avg","value":f"{res_df[vc].mean():,.1f}"},{"label":"Records","value":f"{len(res_df):,}"},{"label":"Max","value":f"{res_df[vc].max():,.0f}"}]
+                            except (ValueError, TypeError): pass
 
+                        # Chart
+                        fig = None
+                        if chart_type == "bar" and len(res_df.columns) >= 2:
+                            x_col = res_df.columns[0]
+                            y_col = next((c for c in res_df.columns[1:] if pd.api.types.is_numeric_dtype(res_df[c])), res_df.columns[1])
+                            try: res_df[y_col] = pd.to_numeric(res_df[y_col], errors="coerce")
+                            except: pass
+                            fig = bar(res_df.head(30), x_col, y_col, active_prompt[:60])
+                        elif chart_type == "pie" and len(res_df.columns) >= 2:
+                            fig = pie(res_df, res_df.columns[0], res_df.columns[1], active_prompt[:60])
+                        if fig: st.plotly_chart(fig, use_container_width=True)
+
+                        answer_txt = f"📊 **{len(res_df):,} records** for **{region_ctx}**." + (" Sorted by expiry." if "expir" in active_prompt.lower() else "")
+                        st.markdown(answer_txt)
+                        st.dataframe(res_df, use_container_width=True, hide_index=True, height=300)
+                        st.download_button("📥 Download CSV", res_df.to_csv(index=False), f"rights_query_{region_ctx}.csv","text/csv",key="dl_live")
+
+                        # ── Feedback buttons ──────────────────────────────────
+                        if log_id:
+                            fb_key = f"fb_{log_id}"
+                            if fb_key not in st.session_state:
+                                fc1, fc2, _ = st.columns([1, 1, 8])
+                                with fc1:
+                                    if st.button("👍", key=f"up_live_{log_id}", help="Good answer"):
+                                        log_feedback(DB_CONN, log_id, "thumbs_up")
+                                        st.session_state[fb_key] = "thumbs_up"
+                                        st.rerun()
+                                with fc2:
+                                    if st.button("👎", key=f"dn_live_{log_id}", help="Bad answer"):
+                                        log_feedback(DB_CONN, log_id, "thumbs_down")
+                                        st.session_state[fb_key] = "thumbs_down"
+                                        st.rerun()
+
+                        st.session_state.chat_history.append({
+                            "question": active_prompt, "answer": answer_txt,
+                            "data": res_df.copy(), "chart": fig,
+                            "metrics": metrics_data, "sql": sql,
+                            "region": region_ctx, "chips": intent.chips,
+                            "log_id": log_id,
+                        })
+                    else:
+                        st.warning("No records returned — try removing a chip filter or rewording your query.")
 
     if st.session_state.chat_history:
         if st.button("🗑 Clear Chat", key="clear_chat"):
@@ -1670,22 +1601,13 @@ def page_custom_dashboard():
 # ══════════════════════════════════════════════════════════════════════════════
 # ANALYTICS
 # ══════════════════════════════════════════════════════════════════════════════
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ANALYTICS  ◄── PATCHED v5.1
-# FIXES:
-#   1. df_7d includes cross_intent column (was missing → potential KeyError)
-#   2. df_14d includes error_message column (was missing → _classify_outcome broke)
-#   3. Feedback ups/downs use .get() null-safety; empty table no longer returns 0
-#   4. _classify_outcome uses row.get() to avoid KeyError on missing column
-#   5. Quality tab: new LLM vs Rule parse-method breakdown chart
-# ══════════════════════════════════════════════════════════════════════════════
 def page_analytics():
     st.markdown('<div class="page-header">📊 Analytics</div>', unsafe_allow_html=True)
     st.markdown('<div class="page-sub">System health · performance · quality · adoption · KPI tracker</div>', unsafe_allow_html=True)
 
     tabs = st.tabs(["Overview", "Performance", "Quality", "Adoption", "KPI Tracker"])
 
+    # ── Safe SQL helper (read directly from DB_CONN, bypass execute_sql guard) ─
     def _sql(query: str) -> pd.DataFrame:
         try:
             return pd.read_sql_query(query, DB_CONN)
@@ -1699,23 +1621,17 @@ def page_analytics():
     d10_start = (today - pd.Timedelta(days=9)).strftime("%Y-%m-%d")
 
     # ── Pre-fetch shared datasets ─────────────────────────────────────────────
-    # FIX 1: added cross_intent column (was missing)
     df_7d = _sql(f"""
-        SELECT log_id, timestamp, session_id, success,
-               COALESCE(error_message,'') AS error_message,
-               latency_ms, intent_domain, rows_returned, chart_type, cross_intent
+        SELECT log_id, timestamp, session_id, success, error_message,
+               latency_ms, intent_domain, rows_returned, chart_type
         FROM query_log
         WHERE DATE(timestamp) >= '{d7_start}'
     """)
-
-    # FIX 2: added error_message column (was missing → _classify_outcome KeyError)
     df_14d = _sql(f"""
-        SELECT DATE(timestamp) AS day, success,
-               COALESCE(error_message,'') AS error_message
+        SELECT DATE(timestamp) AS day, success, error_message
         FROM query_log
         WHERE DATE(timestamp) >= '{d14_start}'
     """)
-
     df_fb30 = _sql(f"""
         SELECT feedback_type, COUNT(*) AS cnt
         FROM feedback
@@ -1723,7 +1639,7 @@ def page_analytics():
         GROUP BY feedback_type
     """)
 
-    # ── Headline KPIs ─────────────────────────────────────────────────────────
+    # ── Compute headline KPIs ─────────────────────────────────────────────────
     total_q   = len(df_7d)
     latencies = df_7d["latency_ms"].dropna().values if not df_7d.empty else np.array([])
     p95_s     = float(np.percentile(latencies, 95)) / 1000 if len(latencies) else 0.0
@@ -1740,17 +1656,9 @@ def page_analytics():
     else:
         intent_match = 0.0
 
-    wau = int(df_7d["session_id"].nunique()) if not df_7d.empty else 0
-
-    # FIX 3: robust null-safe feedback count
-    if not df_fb30.empty:
-        up_rows   = df_fb30[df_fb30["feedback_type"] == "thumbs_up"]["cnt"]
-        down_rows = df_fb30[df_fb30["feedback_type"] == "thumbs_down"]["cnt"]
-        ups   = int(up_rows.sum())   if not up_rows.empty   else 0
-        downs = int(down_rows.sum()) if not down_rows.empty else 0
-    else:
-        ups = downs = 0
-
+    wau  = int(df_7d["session_id"].nunique()) if not df_7d.empty else 0
+    ups  = int(df_fb30[df_fb30["feedback_type"] == "thumbs_up"]["cnt"].sum())  if not df_fb30.empty else 0
+    downs= int(df_fb30[df_fb30["feedback_type"] == "thumbs_down"]["cnt"].sum()) if not df_fb30.empty else 0
     total_fb   = ups + downs
     thumbs_pct = ups / total_fb * 100 if total_fb else 0.0
     ratio_str  = f"{ups/downs:.1f}× upvotes/downvotes" if downs else "No downvotes yet"
@@ -1771,9 +1679,9 @@ def page_analytics():
     delta_wau   = f"{wau - prev_wau:+} vs last week" if prev_wau else "—"
     delta_sr    = f"{success_r - prev_sr:+.0f}pp vs last week" if prev_sr else "—"
 
-    # FIX 4: use row.get() so missing column never causes KeyError
+    # ── Outcome classifier (reused across tabs) ───────────────────────────────
     def _classify_outcome(row):
-        if row.get("success") == 1:
+        if row["success"] == 1:
             return "Success"
         em = str(row.get("error_message", "") or "").lower()
         if any(k in em for k in ("block", "unsupport", "refuse", "not permit", "only select")):
@@ -1788,18 +1696,24 @@ def page_analytics():
         st.markdown("---")
 
         r1c1, r1c2, r1c3, r1c4 = st.columns(4)
-        with r1c1: st.metric("Total queries (7d)", f"{total_q:,}", delta_q)
+        with r1c1:
+            st.metric("Total queries (7d)", f"{total_q:,}", delta_q)
         with r1c2:
             p95_label = "🔴 Above target" if p95_s > 10 else "🟢 On target"
             st.metric("P95 response time (7d)", f"{p95_s:.1f}s", f"Target: <10s  {p95_label}")
-        with r1c3: st.metric("Query success rate (7d)", f"{success_r:.0f}%", delta_sr)
-        with r1c4: st.metric("Intent match rate (7d)", f"{intent_match:.0f}%", "Target: ≥95%")
+        with r1c3:
+            st.metric("Query success rate (7d)", f"{success_r:.0f}%", delta_sr)
+        with r1c4:
+            st.metric("Intent match rate (7d)", f"{intent_match:.0f}%", "Target: ≥95%")
 
         r2c1, r2c2, _, __ = st.columns(4)
-        with r2c1: st.metric("Weekly active users", str(wau), delta_wau)
-        with r2c2: st.metric("Thumbs-up ratio (30d)", f"{thumbs_pct:.0f}%", ratio_str)
+        with r2c1:
+            st.metric("Weekly active users", str(wau), delta_wau)
+        with r2c2:
+            st.metric("Thumbs-up ratio (30d)", f"{thumbs_pct:.0f}%", ratio_str)
 
         st.markdown("---")
+
         left, right = st.columns([6, 4], gap="large")
 
         with left:
@@ -1807,8 +1721,11 @@ def page_analytics():
             st.caption("Usage volume trend")
             if not df_14d.empty:
                 daily_cnt = df_14d.groupby("day").size().reset_index(name="queries")
-                fig_daily = px.bar(daily_cnt, x="day", y="queries",
-                    color_discrete_sequence=["#5B5FC7"], template="plotly_white")
+                fig_daily = px.bar(
+                    daily_cnt, x="day", y="queries",
+                    color_discrete_sequence=["#5B5FC7"],
+                    template="plotly_white",
+                )
                 fig_daily.update_layout(**PT, height=320, xaxis_title="", yaxis_title="")
                 st.plotly_chart(fig_daily, use_container_width=True)
             else:
@@ -1823,9 +1740,11 @@ def page_analytics():
                 outcome_cnt = df_14d_out["outcome"].value_counts().reset_index()
                 outcome_cnt.columns = ["outcome", "count"]
                 color_map = {"Success": "#2ecc71", "Failed": "#e74c3c", "Refused": "#95a5a6"}
-                fig_pie = px.pie(outcome_cnt, names="outcome", values="count",
+                fig_pie = px.pie(
+                    outcome_cnt, names="outcome", values="count",
                     color="outcome", color_discrete_map=color_map,
-                    hole=0.55, template="plotly_white")
+                    hole=0.55, template="plotly_white",
+                )
                 fig_pie.update_layout(**PT, height=320, showlegend=True)
                 fig_pie.update_traces(textposition="inside", textinfo="percent")
                 st.plotly_chart(fig_pie, use_container_width=True)
@@ -1851,9 +1770,12 @@ def page_analytics():
         with perf_l:
             st.markdown("**Latency distribution (ms)**")
             if len(latencies):
-                fig_hist = px.histogram(x=latencies, nbins=30,
+                fig_hist = px.histogram(
+                    x=latencies, nbins=30,
                     labels={"x": "Latency (ms)", "y": "Queries"},
-                    color_discrete_sequence=["#7c3aed"], template="plotly_white")
+                    color_discrete_sequence=["#7c3aed"],
+                    template="plotly_white",
+                )
                 fig_hist.update_layout(**PT, height=300, xaxis_title="Latency (ms)", yaxis_title="Count")
                 st.plotly_chart(fig_hist, use_container_width=True)
             else:
@@ -1865,17 +1787,19 @@ def page_analytics():
             if not df_fail.empty:
                 def _fail_reason(em):
                     em = str(em or "").lower()
-                    if "timeout" in em: return "DB timeout"
-                    if "syntax" in em or "sql" in em: return "SQL error"
-                    if any(k in em for k in ("unsupport","refuse","not permit","only select")):
+                    if "timeout"  in em: return "DB timeout"
+                    if "syntax"   in em or "sql" in em: return "SQL error"
+                    if any(k in em for k in ("unsupport", "refuse", "not permit", "only select")):
                         return "Unsupported intent"
                     return "Other"
                 df_fail["reason"] = df_fail["error_message"].apply(_fail_reason)
                 reason_cnt = df_fail["reason"].value_counts().reset_index()
                 reason_cnt.columns = ["reason", "count"]
-                fig_fail = px.pie(reason_cnt, names="reason", values="count",
+                fig_fail = px.pie(
+                    reason_cnt, names="reason", values="count",
                     hole=0.42, template="plotly_white",
-                    color_discrete_sequence=["#ef4444","#f59e0b","#94a3b8","#3b82f6"])
+                    color_discrete_sequence=["#ef4444","#f59e0b","#94a3b8","#3b82f6"],
+                )
                 fig_fail.update_layout(**PT, height=300)
                 st.plotly_chart(fig_fail, use_container_width=True)
             else:
@@ -1901,16 +1825,22 @@ def page_analytics():
                 line=dict(color="#7c3aed", width=2.5),
                 marker=dict(size=7, color="#7c3aed"),
             ))
-            fig_trend.add_hline(y=10, line_dash="dash", line_color="#ef4444",
-                annotation_text="Target 10s", annotation_position="top right")
-            fig_trend.update_layout(**PT, height=300, xaxis_title="", yaxis_title="Seconds",
-                yaxis=dict(rangemode="tozero"))
+            fig_trend.add_hline(
+                y=10, line_dash="dash", line_color="#ef4444",
+                annotation_text="Target 10s",
+                annotation_position="top right",
+            )
+            fig_trend.update_layout(
+                **PT, height=300,
+                xaxis_title="", yaxis_title="Seconds",
+                yaxis=dict(rangemode="tozero"),
+            )
             st.plotly_chart(fig_trend, use_container_width=True)
         else:
             st.info("Not enough data for trend chart yet — run some queries to populate it.")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # TAB 2 — QUALITY  (PATCHED: error_message fix + NEW LLM/Rule chart)
+    # TAB 2 — QUALITY
     # ══════════════════════════════════════════════════════════════════════════
     with tabs[2]:
         st.markdown("#### Quality")
@@ -1920,49 +1850,16 @@ def page_analytics():
             df_14d_q["outcome"] = df_14d_q.apply(_classify_outcome, axis=1)
             stacked = df_14d_q.groupby(["day", "outcome"]).size().reset_index(name="count")
             color_map = {"Success": "#2ecc71", "Failed": "#e74c3c", "Refused": "#95a5a6"}
-            fig_stack = px.bar(stacked, x="day", y="count", color="outcome",
+            fig_stack = px.bar(
+                stacked, x="day", y="count", color="outcome",
                 title="Query outcome breakdown per day (last 14 days)",
-                color_discrete_map=color_map, barmode="stack", template="plotly_white")
+                color_discrete_map=color_map,
+                barmode="stack", template="plotly_white",
+            )
             fig_stack.update_layout(**PT, height=340, xaxis_title="", yaxis_title="Queries")
             st.plotly_chart(fig_stack, use_container_width=True)
         else:
             st.info("No data yet.")
-
-        st.markdown("---")
-
-        # ── FIX 5: LLM vs Rule parse-method breakdown ─────────────────────────
-        st.markdown("#### Parse Method — LLM vs Rule-based (7d)")
-        if not df_7d.empty and len(latencies) > 0:
-            # Heuristic: LLM adds Ollama network RTT (~200-2000ms extra).
-            # Queries with latency > 1.5× median are classified as LLM-parsed.
-            median_ms = float(np.median(latencies))
-            df_method = df_7d.copy()
-            df_method["parse_method"] = df_method["latency_ms"].apply(
-                lambda x: "🤖 LLM" if (pd.notna(x) and float(x) > median_ms * 1.5) else "⚙️ Rule-based"
-            )
-            method_cnt = df_method["parse_method"].value_counts().reset_index()
-            method_cnt.columns = ["method", "count"]
-
-            pm_c1, pm_c2 = st.columns([3, 2])
-            with pm_c1:
-                fig_method = px.pie(method_cnt, names="method", values="count",
-                    color="method",
-                    color_discrete_map={"🤖 LLM": "#7c3aed", "⚙️ Rule-based": "#10b981"},
-                    hole=0.50, template="plotly_white",
-                    title="Parse method split (7d — latency heuristic)")
-                fig_method.update_layout(**PT, height=280)
-                st.plotly_chart(fig_method, use_container_width=True)
-            with pm_c2:
-                llm_cnt  = int(method_cnt.loc[method_cnt["method"]=="🤖 LLM","count"].sum()) if "🤖 LLM" in method_cnt["method"].values else 0
-                rule_cnt = int(method_cnt.loc[method_cnt["method"]=="⚙️ Rule-based","count"].sum()) if "⚙️ Rule-based" in method_cnt["method"].values else 0
-                st.metric("🤖 LLM queries (est.)",        f"{llm_cnt:,}")
-                st.metric("⚙️ Rule-based queries (est.)", f"{rule_cnt:,}")
-                st.caption(
-                    "Heuristic: latency > 1.5× session median → LLM (Ollama adds network overhead). "
-                    "Enable Ollama in sidebar and run queries to see a real split."
-                )
-        else:
-            st.info("No query data for parse method breakdown yet — run some queries in Chat first.")
 
         st.markdown("---")
         st.markdown("#### User Feedback (30 days)")
@@ -1972,14 +1869,15 @@ def page_analytics():
         fb_c3.metric("Ratio",          ratio_str)
 
         if not df_fb30.empty and total_fb:
-            fig_fb = px.pie(df_fb30, names="feedback_type", values="cnt",
+            fig_fb = px.pie(
+                df_fb30, names="feedback_type", values="cnt",
                 color="feedback_type",
                 color_discrete_map={"thumbs_up":"#2ecc71","thumbs_down":"#ef4444"},
-                hole=0.5, template="plotly_white", title="Feedback split")
+                hole=0.5, template="plotly_white",
+                title="Feedback split",
+            )
             fig_fb.update_layout(**PT, height=280)
             st.plotly_chart(fig_fb, use_container_width=True)
-        else:
-            st.info("No feedback yet — use 👍 / 👎 in Chat to record feedback.")
 
     # ══════════════════════════════════════════════════════════════════════════
     # TAB 3 — ADOPTION
@@ -2002,9 +1900,12 @@ def page_analytics():
             GROUP BY day ORDER BY day
         """)
         if not df_sess.empty:
-            fig_sess = px.bar(df_sess, x="day", y="sessions",
+            fig_sess = px.bar(
+                df_sess, x="day", y="sessions",
                 title="New sessions per day (last 14 days)",
-                color_discrete_sequence=["#7c3aed"], template="plotly_white")
+                color_discrete_sequence=["#7c3aed"],
+                template="plotly_white",
+            )
             fig_sess.update_layout(**PT, height=300, xaxis_title="", yaxis_title="Sessions")
             st.plotly_chart(fig_sess, use_container_width=True)
         else:
@@ -2019,11 +1920,18 @@ def page_analytics():
             )
             top_intent.columns = ["intent", "count"]
             if not top_intent.empty:
-                fig_intent = px.bar(top_intent, x="count", y="intent", orientation="h",
-                    title="", color_discrete_sequence=["#7c3aed"], template="plotly_white")
-                fig_intent.update_layout(**PT,
-                    height=max(260, len(top_intent) * 36 + 60),
-                    yaxis=dict(autorange="reversed"), xaxis_title="Queries", yaxis_title="")
+                fig_intent = px.bar(
+                    top_intent, x="count", y="intent",
+                    orientation="h",
+                    title="",
+                    color_discrete_sequence=["#7c3aed"],
+                    template="plotly_white",
+                )
+                fig_intent.update_layout(
+                    **PT, height=max(260, len(top_intent) * 36 + 60),
+                    yaxis=dict(autorange="reversed"),
+                    xaxis_title="Queries", yaxis_title="",
+                )
                 st.plotly_chart(fig_intent, use_container_width=True)
             else:
                 st.info("No intent data yet.")
@@ -2036,9 +1944,11 @@ def page_analytics():
             )
             ct_cnt.columns = ["chart_type", "count"]
             if not ct_cnt.empty:
-                fig_ct = px.pie(ct_cnt, names="chart_type", values="count",
+                fig_ct = px.pie(
+                    ct_cnt, names="chart_type", values="count",
                     hole=0.42, template="plotly_white",
-                    color_discrete_sequence=PT["colorway"])
+                    color_discrete_sequence=PT["colorway"],
+                )
                 fig_ct.update_layout(**PT, height=280)
                 st.plotly_chart(fig_ct, use_container_width=True)
 
@@ -2056,16 +1966,16 @@ def page_analytics():
             return "🟢 On track" if ok else "🔴 Off track"
 
         p0_rows = [
-            {"Metric": "Total queries (7d)",  "Target": "≥ 500", "Actual": f"{total_q:,}",      "Status": _status(total_q,   500),      "Deadline": "30 Apr"},
-            {"Metric": "P95 response time",   "Target": "< 10s", "Actual": f"{p95_s:.1f}s",     "Status": _status(p95_s,     10, False),"Deadline": "30 Apr"},
-            {"Metric": "Query success rate",  "Target": "≥ 90%", "Actual": f"{success_r:.0f}%", "Status": _status(success_r, 90),       "Deadline": "30 Apr"},
-            {"Metric": "Weekly active users", "Target": "≥ 20",  "Actual": str(wau),             "Status": _status(wau,       20),       "Deadline": "30 Apr"},
+            {"Metric": "Total queries (7d)",   "Target": "≥ 500",  "Actual": f"{total_q:,}",       "Status": _status(total_q,   500),       "Deadline": "30 Apr"},
+            {"Metric": "P95 response time",    "Target": "< 10s",  "Actual": f"{p95_s:.1f}s",      "Status": _status(p95_s,     10,  False), "Deadline": "30 Apr"},
+            {"Metric": "Query success rate",   "Target": "≥ 90%",  "Actual": f"{success_r:.0f}%",  "Status": _status(success_r, 90),         "Deadline": "30 Apr"},
+            {"Metric": "Weekly active users",  "Target": "≥ 20",   "Actual": str(wau),              "Status": _status(wau,       20),         "Deadline": "30 Apr"},
         ]
         p1_rows = [
-            {"Metric": "Intent match rate",   "Target": "≥ 95%", "Actual": f"{intent_match:.0f}%","Status": _status(intent_match, 95),         "Deadline": "30 Jun"},
-            {"Metric": "Thumbs-up ratio",     "Target": "≥ 80%", "Actual": f"{thumbs_pct:.0f}%", "Status": _status(thumbs_pct,   80),          "Deadline": "30 Jun"},
-            {"Metric": "Failed query rate",   "Target": "< 10%", "Actual": f"{failed_rate:.0f}%","Status": _status(failed_rate,  10,  False),  "Deadline": "30 Jun"},
-            {"Metric": "Queries / user (7d)", "Target": "≥ 5",   "Actual": str(qpu_val),          "Status": _status(qpu_val,      5),           "Deadline": "30 Jun"},
+            {"Metric": "Intent match rate",    "Target": "≥ 95%",  "Actual": f"{intent_match:.0f}%","Status": _status(intent_match,  95),        "Deadline": "30 Jun"},
+            {"Metric": "Thumbs-up ratio",      "Target": "≥ 80%",  "Actual": f"{thumbs_pct:.0f}%", "Status": _status(thumbs_pct,    80),         "Deadline": "30 Jun"},
+            {"Metric": "Failed query rate",    "Target": "< 10%",  "Actual": f"{failed_rate:.0f}%","Status": _status(failed_rate,   10,  False), "Deadline": "30 Jun"},
+            {"Metric": "Queries / user (7d)",  "Target": "≥ 5",    "Actual": str(qpu_val),          "Status": _status(qpu_val,       5),          "Deadline": "30 Jun"},
         ]
 
         st.markdown("##### P0 Metrics — deadline 30 April")
@@ -2075,8 +1985,10 @@ def page_analytics():
         st.dataframe(pd.DataFrame(p1_rows), use_container_width=True, hide_index=True)
 
         st.markdown("---")
-        st.caption(f"All metrics computed live from `query_log` · `feedback` · `user_session` · refreshed on page load · last updated {datetime.now().strftime('%H:%M · %d %b %Y')}")
+        st.caption(f"All metrics computed live from `query_log` · `feedback` · `user_session` tables · refreshed on each page load · last updated {datetime.now().strftime('%H:%M · %d %b %Y')}")
 
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ROUTER
 # ══════════════════════════════════════════════════════════════════════════════
 {
