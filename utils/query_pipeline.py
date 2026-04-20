@@ -174,6 +174,7 @@ def _detect_cross_intent(intent: "QueryIntent") -> Optional[str]:
     if i.has_expiry and i.has_sales:                           return "expiry_sales"
     if i.has_work and (i.has_rights or i.has_title):           return "workorder_rights"
     if i.has_title and i.has_sales:                            return "title_sales"
+    # Re‑enabled deals_rights – now uses content_deal (valid join)
     if i.has_deal_word and i.has_rights_word:                  return "deals_rights"
     return None
 
@@ -204,7 +205,7 @@ def _build_chips(intent: "QueryIntent") -> list[dict]:
     })
     if intent.cross_intent:
         cross_labels = {
-            "deals_rights": "Deals + Rights", "title_health": "Title Health",
+            "deals_rights": "Content Deals + Rights", "title_health": "Title Health",
             "expiry_sales": "Expiry + Renewal", "workorder_rights": "Work Orders + Rights",
             "movie_dna": "Movie DNA", "movie_sales": "Movie Sales", "title_sales": "Title Sales",
         }
@@ -345,7 +346,7 @@ def parse_with_llm(question: str, selected_region: str) -> Optional[QueryIntent]
     base.chips = _build_chips(base)
     return base
 
-# ========== Stage 2: SQL Generation (unchanged, rule‑based) ==========
+# ========== Stage 2: SQL Generation (rule‑based) ==========
 def _rw(regions: list[str], col: str = "region") -> str:
     if not regions: return "1=1"
     if len(regions) == 1: return f"UPPER({col}) = '{regions[0]}'"
@@ -377,7 +378,7 @@ def _build_where(*parts) -> str:
     cleaned = [p.strip() for p in parts if p and p.strip() and p.strip() not in ("1=1","AND 1=1")]
     return " AND ".join(cleaned) if cleaned else "1=1"
 
-# ========== FULL ORIGINAL generate() FUNCTION (rule‑based) ==========
+# ========== FULL ORIGINAL generate() WITH FIXED deals_rights ==========
 def generate(intent: QueryIntent) -> tuple[str, Optional[str], str]:
     q  = intent.normalised
     r  = intent.regions
@@ -387,7 +388,7 @@ def generate(intent: QueryIntent) -> tuple[str, Optional[str], str]:
     rw       = _rw(r)
     rw_mr    = _rw(r, "mr.region")
     rw_t     = _rw(r, "t.region")
-    rw_d     = _rw(r, "d.region")
+    rw_d     = _rw(r, "d.region")        # d refers to content_deal
     rw_sd    = _rw(r, "sd.region")
     rw_dna   = _rw(r, "dna.region")
     rw_wo    = _rw(r, "wo.region")
@@ -399,28 +400,40 @@ def generate(intent: QueryIntent) -> tuple[str, Optional[str], str]:
     days     = intent.expiry_days or 90
     ci = intent.cross_intent
 
+    # ========== FIXED: deals_rights using content_deal + media_rights ==========
     if ci == "deals_rights":
+        # Determine if the user wants a summary (counts) or detailed table
         if any(kw in q for kw in ["breakdown", "summary", "count", "how many", "by region", "compare", "overview"]):
             sql = f"""
-                SELECT d.region, COUNT(DISTINCT d.deal_id) AS deal_count, SUM(d.deal_value) AS total_deal_value,
-                       SUM(CASE WHEN d.status='Active' THEN 1 ELSE 0 END) AS active_deals,
-                       COUNT(DISTINCT mr.rights_id) AS linked_rights,
+                SELECT cd.region, 
+                       COUNT(DISTINCT cd.deal_id) AS deal_count,
+                       COUNT(DISTINCT mr.rights_id) AS rights_count,
+                       COUNT(DISTINCT mr.title_id) AS titles_covered,
                        SUM(CASE WHEN mr.status='Active' THEN 1 ELSE 0 END) AS active_rights
-                FROM deals d LEFT JOIN media_rights mr ON d.title_id = mr.title_id AND {rw_mr}
-                WHERE {rw_d} {date_sql} GROUP BY d.region ORDER BY total_deal_value DESC
+                FROM content_deal cd
+                LEFT JOIN media_rights mr ON cd.deal_id = mr.deal_id AND {rw_mr}
+                WHERE {rw_d} {date_sql}
+                GROUP BY cd.region
+                ORDER BY deal_count DESC
             """
             return sql.strip(), None, 'bar'
-        sql = f"""
-            SELECT d.deal_id, d.deal_name, d.vendor_name, d.deal_type, d.deal_value, d.deal_date, d.expiry_date,
-                   d.status AS deal_status, d.region AS deal_region, mr.title_name, mr.rights_type,
-                   mr.media_platform_primary AS rights_platform, mr.term_from AS rights_start, 
-                   mr.term_to AS rights_expiry, CAST(JULIANDAY(mr.term_to)-JULIANDAY('now') AS INTEGER) AS rights_days_left,
-                   mr.status AS rights_status
-            FROM deals d LEFT JOIN media_rights mr ON d.title_id = mr.title_id AND {rw_mr}
-            WHERE {rw_d} {date_sql} ORDER BY d.deal_value DESC, mr.term_to ASC LIMIT 200
-        """
-        return sql.strip(), None, 'table'
+        else:
+            # Detailed table
+            sql = f"""
+                SELECT cd.deal_id, cd.deal_name, cd.deal_source, cd.deal_type, cd.region AS deal_region,
+                       mr.title_name, mr.rights_type, mr.media_platform_primary,
+                       mr.territories, mr.language, mr.exclusivity,
+                       mr.term_from, mr.term_to, mr.status AS rights_status,
+                       CAST(JULIANDAY(mr.term_to)-JULIANDAY('now') AS INTEGER) AS days_remaining
+                FROM content_deal cd
+                LEFT JOIN media_rights mr ON cd.deal_id = mr.deal_id AND {rw_mr}
+                WHERE {rw_d} {date_sql} {plat_f}
+                ORDER BY cd.deal_name, mr.term_to ASC
+                LIMIT 300
+            """
+            return sql.strip(), None, 'table'
 
+    # ========== Other cross-intents (unchanged) ==========
     if ci == "title_health":
         tf = f"AND {_title_like(th,'t.title_name')}" if th else ""
         sql = f"""
@@ -507,6 +520,7 @@ def generate(intent: QueryIntent) -> tuple[str, Optional[str], str]:
         """
         return sql.strip(), None, 'table'
 
+    # ========== Single‑domain queries (unchanged) ==========
     if any(kw in q for kw in DNA_KW):
         tf = f" AND {_title_like(th,'dna.title_name')}" if th else ""
         sql = f"""
