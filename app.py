@@ -883,6 +883,7 @@ def page_chat():
             if msg.get("chart"):
                 st.plotly_chart(msg["chart"], use_container_width=True, key=f"hchart_{i}")
             st.markdown(msg.get("answer","Here are the results:"))
+            st.markdown(match_method_badge(msg.get("match_method", "rule")), unsafe_allow_html=True)
             if msg.get("data") is not None and not msg["data"].empty:
                 st.dataframe(msg["data"], use_container_width=True, hide_index=True, height=280)
                 st.download_button("📥 CSV", msg["data"].to_csv(index=False), f"query_{i}.csv","text/csv",key=f"dl_h_{i}")
