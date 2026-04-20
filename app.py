@@ -793,8 +793,25 @@ def page_work_orders():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CHAT / QUERY  ◄── integrated with 3-stage pipeline + SQL chips
+# LLM / RULE BADGE HELPER  ◄── must be defined BEFORE page_chat (v5.1)
 # ══════════════════════════════════════════════════════════════════════════════
+def _render_method_badge(match_method: str):
+    """Render a small inline pill showing LLM or Rule-based parse."""
+    if match_method == "llm":
+        st.markdown(
+            '<span style="display:inline-block;background:#ede9fe;border:1px solid #c4b5fd;'
+            'border-radius:20px;padding:2px 10px;font-size:.72rem;font-weight:700;color:#5b21b6;">'
+            '🤖 LLM parsed</span>',
+            unsafe_allow_html=True,
+        )
+    elif match_method == "rule":
+        st.markdown(
+            '<span style="display:inline-block;background:#f0fdf4;border:1px solid #86efac;'
+            'border-radius:20px;padding:2px 10px;font-size:.72rem;font-weight:700;color:#166534;">'
+            '⚙️ Rule parsed</span>',
+            unsafe_allow_html=True,
+        )
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CHAT / QUERY  ◄── 3-stage pipeline + SQL chips  (PATCHED v5.1)
