@@ -30,7 +30,8 @@ from utils.query_pipeline import parse_query, generate, validate
 from utils.query_chips_ui  import render_chips, chips_query_block
 
 # ─── Hybrid LLM toggle initialisation ──────────────────────────────────────
-import query_pipeline
+# Import the utils version so LLM_LAST_STATUS and USE_LLM are on the right module
+import utils.query_pipeline as query_pipeline
 
 if "llm_enabled" not in st.session_state:
     st.session_state.llm_enabled = True
@@ -373,7 +374,7 @@ with st.sidebar:
         query_pipeline.USE_LLM = llm_enabled
         st.rerun()
     # Live LLM status — updated after every query
-    _llm_status = query_pipeline.LLM_LAST_STATUS
+    _llm_status = getattr(query_pipeline, 'LLM_LAST_STATUS', {'success': None, 'error': ''})
     if _llm_status["success"] is True:
         st.markdown("""<div style="margin:4px 0 0;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);
 border-radius:6px;padding:4px 8px;font-size:.68rem;color:#6ee7b7">✅ Ollama OK — last query LLM-parsed</div>""", unsafe_allow_html=True)
