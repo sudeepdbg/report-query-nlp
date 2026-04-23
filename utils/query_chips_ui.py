@@ -2,20 +2,14 @@
 query_chips_ui.py — Enhancement 4: SQL Logic Chips UI
 Renders parsed QueryIntent as interactive editable chips/facets.
 Users can remove a chip or edit a value → query reruns automatically.
-
-FIXES (v5.1):
-  - chips_query_block now correctly re-uses a cached intent's match_method
-    so the LLM/rule badge in the chat page stays accurate after chip edits.
-  - When ↺ Reset filters rebuilds intent via preprocess(), the match_method
-    is preserved from the original parse (reset only resets filters, not the
-    parsing method).
 """
 from __future__ import annotations
 import copy
 import streamlit as st
 from typing import Optional
 
-from query_pipeline import (
+# ─── FIX: Use relative import inside the utils package ─────────────────────
+from .query_pipeline import (
     QueryIntent, DateFilter,
     parse_query, preprocess, generate, validate,
     REGION_CANONICAL, ALL_MEDIA,
@@ -68,7 +62,8 @@ def _save_intent(prefix: str, intent: QueryIntent):
     st.session_state[_ss_key(prefix)] = intent
 
 def _rebuild_chips(intent: QueryIntent) -> list[dict]:
-    from query_pipeline import _build_chips
+    # FIX: relative import inside the function (private helper is fine)
+    from .query_pipeline import _build_chips
     return _build_chips(intent)
 
 def _parse_date_preset(label: str) -> Optional[DateFilter]:
@@ -88,9 +83,6 @@ def _parse_date_preset(label: str) -> Optional[DateFilter]:
     return None
 
 def render_chips(intent: QueryIntent, key_prefix: str = "chips", on_change_rerun: bool = True) -> Optional[QueryIntent]:
-    # CSS is already injected globally in app.py — do NOT call _inject_css() here.
-    # Calling st.markdown(<style>) inside st.chat_message() causes Streamlit to
-    # render the CSS as raw visible text instead of applying it.
     _save_intent(key_prefix, intent)
     changed_intent: Optional[QueryIntent] = None
 
@@ -202,8 +194,6 @@ def render_chips(intent: QueryIntent, key_prefix: str = "chips", on_change_rerun
     with cols[-1]:
         st.markdown('<div style="margin-top:18px"></div>', unsafe_allow_html=True)
         if st.button("↺ Reset filters", key=f"{key_prefix}_reset_all", help="Rerun original query"):
-            # Reset filters via preprocess but PRESERVE the original match_method so
-            # the LLM/rule badge stays accurate.
             original_method = intent.match_method
             new_intent = preprocess(intent.raw_question, intent.regions[0] if intent.regions else "NA")
             new_intent.match_method = original_method
@@ -226,16 +216,13 @@ def chips_query_block(
     """
     Full 3-stage pipeline with chip UI.
     Returns (sql, error, chart_type, region_ctx, intent).
-    intent.match_method is "llm" or "rule" — callers use this to render a badge.
     """
     import html as _html
 
     stored_intent: Optional[QueryIntent] = st.session_state.get(f"chips_{key_prefix}")
     if stored_intent and stored_intent.raw_question == question:
-        # Re-use cached intent (chip edit already applied); match_method preserved.
         intent = stored_intent
     else:
-        # Fresh parse — match_method set by parse_query (llm or rule).
         sql, err, chart_type, region_ctx, intent = parse_query(question, selected_region)
         if err:
             return sql, err, chart_type, region_ctx, intent
