@@ -295,10 +295,12 @@ feedback_type   TEXT NOT NULL,
 timestamp       TEXT DEFAULT (DATETIME('now')),
 comment         TEXT
 );
+-- ADDED end_time column for session tracking (needed for anomaly detection / live dashboard)
 CREATE TABLE IF NOT EXISTS user_session (
 session_id      TEXT PRIMARY KEY,
 start_time      TEXT DEFAULT (DATETIME('now')),
 last_active     TEXT DEFAULT (DATETIME('now')),
+end_time        TEXT,                     -- <-- ADDED
 user_id         TEXT,
 region          TEXT,
 persona         TEXT
@@ -836,21 +838,144 @@ def log_feedback(conn, log_id: int, feedback_type: str, comment: Optional[str] =
 
 def update_session(conn, session_id: str, user_id: Optional[str] = None,
                    region: Optional[str] = None, persona: Optional[str] = None) -> bool:
+    """Insert or update a user session. End_time is left as NULL (active session)."""
     try:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         conn.cursor().execute("""
-        INSERT INTO user_session (session_id, user_id, region, persona)
-        VALUES (?,?,?,?)
+        INSERT INTO user_session (session_id, user_id, region, persona, start_time, last_active, end_time)
+        VALUES (?, ?, ?, ?, ?, ?, NULL)
         ON CONFLICT(session_id) DO UPDATE SET
-        last_active = DATETIME('now'),
-        user_id  = COALESCE(excluded.user_id,  user_session.user_id),
-        region   = COALESCE(excluded.region,   user_session.region),
-        persona  = COALESCE(excluded.persona,  user_session.persona)
-        """, (session_id, user_id, region, persona))
+            last_active = ?,
+            user_id  = COALESCE(?, user_session.user_id),
+            region   = COALESCE(?, user_session.region),
+            persona  = COALESCE(?, user_session.persona),
+            end_time = NULL   -- keep session open
+        """, (session_id, user_id, region, persona, now, now, now, user_id, region, persona))
         conn.commit()
         return True
     except Exception as e:
         logger.error(f"update_session failed: {e}")
         return False
+
+# ─── NEW: Anomaly detection for Live Dashboard ─────────────────────────────────
+def check_anomalies(conn) -> list[dict]:
+    """
+    Detect real-time anomalies from query_log and user_session.
+    Returns a list of anomaly dicts with keys:
+        "severity" (critical/warning/info), "icon", "title", "detail", "ts"
+    """
+    anomalies: list[dict] = []
+    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+    def _q(sql: str) -> list[tuple]:
+        try:
+            cur = conn.cursor()
+            cur.execute(sql)
+            return cur.fetchall()
+        except Exception:
+            return []
+
+    # 1. Error spike (>3 failures in last 60s)
+    rows = _q("""
+        SELECT COUNT(*) FROM query_log
+        WHERE success = 0
+          AND timestamp >= datetime('now', '-60 seconds')
+    """)
+    err_count = rows[0][0] if rows else 0
+    if err_count >= 3:
+        anomalies.append({
+            "severity": "critical",
+            "icon": "🔴",
+            "title": f"Error spike — {err_count} failures in 60 s",
+            "detail": "Multiple consecutive query failures detected. Check DB connectivity and SQL generation.",
+            "ts": now_str,
+        })
+    elif err_count > 0:
+        anomalies.append({
+            "severity": "warning",
+            "icon": "🟡",
+            "title": f"{err_count} query failure(s) in last 60 s",
+            "detail": "Minor error uptick — monitor for escalation.",
+            "ts": now_str,
+        })
+
+    # 2. Slow queries (latency > 15 000 ms in last 5 min)
+    rows = _q("""
+        SELECT COUNT(*), MAX(latency_ms) FROM query_log
+        WHERE latency_ms > 15000
+          AND timestamp >= datetime('now', '-5 minutes')
+    """)
+    slow_count = rows[0][0] if rows else 0
+    max_lat    = rows[0][1] if rows else 0
+    if slow_count > 0:
+        anomalies.append({
+            "severity": "warning",
+            "icon": "🐢",
+            "title": f"{slow_count} slow query/queries (>{15}s) in 5 min",
+            "detail": f"Peak latency: {(max_lat or 0)/1000:.1f}s. Consider query optimisation or index review.",
+            "ts": now_str,
+        })
+
+    # 3. Session surge (>10 new sessions in last 5 min)
+    rows = _q("""
+        SELECT COUNT(*) FROM user_session
+        WHERE start_time >= datetime('now', '-5 minutes')
+    """)
+    sess_count = rows[0][0] if rows else 0
+    if sess_count > 10:
+        anomalies.append({
+            "severity": "info",
+            "icon": "📈",
+            "title": f"Session surge — {sess_count} new sessions in 5 min",
+            "detail": "Unusually high concurrent usage. Monitor for performance degradation.",
+            "ts": now_str,
+        })
+
+    # 4. Zero-result queries (≥5 in last 2 min)
+    rows = _q("""
+        SELECT COUNT(*) FROM query_log
+        WHERE rows_returned = 0
+          AND success = 1
+          AND timestamp >= datetime('now', '-2 minutes')
+    """)
+    zero_count = rows[0][0] if rows else 0
+    if zero_count >= 5:
+        anomalies.append({
+            "severity": "warning",
+            "icon": "🕳",
+            "title": f"{zero_count} queries returned 0 rows (2 min)",
+            "detail": "High rate of empty result sets — possible data sync issue or bad region/filter defaults.",
+            "ts": now_str,
+        })
+
+    # 5. Possible Ollama outage (last 3 consecutive queries all failed)
+    rows = _q("""
+        SELECT success FROM query_log
+        WHERE timestamp >= datetime('now', '-10 minutes')
+        ORDER BY timestamp DESC
+        LIMIT 5
+    """)
+    if len(rows) >= 3 and all(r[0] == 0 for r in rows[:3]):
+        anomalies.append({
+            "severity": "critical",
+            "icon": "🤖",
+            "title": "Possible Ollama outage — last 3 queries all failed",
+            "detail": "Check that Ollama is running on localhost:11434 and the llama3.1 model is loaded.",
+            "ts": now_str,
+        })
+
+    # All clear – always show a green "no anomalies" card
+    if not anomalies:
+        anomalies.append({
+            "severity": "info",
+            "icon": "✅",
+            "title": "All clear — no anomalies detected",
+            "detail": "System operating within normal parameters.",
+            "ts": now_str,
+        })
+
+    return anomalies
+
 
 class DatabaseManager:
     def __init__(self, db_path="foundry.db"):
