@@ -2332,7 +2332,7 @@ def page_analytics():
                 import requests as _req
                 t0_ol = time.time()
                 _resp = _req.post(
-                    "http://localhost:11434/api/generate",
+                    "http://127.0.0.1:11434/api/generate",
                     json={
                         "model":  "llama3.1",
                         "prompt": "ping",
