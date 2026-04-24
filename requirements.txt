@@ -10,3 +10,4 @@ sentence-transformers==3.4.1
 openai==1.75.0
 tableauserverclient
 pyarrow
+streamlit-autorefresh
