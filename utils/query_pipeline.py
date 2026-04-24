@@ -29,8 +29,8 @@ logger = logging.getLogger(__name__)
 
 # ── LLM config ────────────────────────────────────────────────────────────────
 OLLAMA_URL   = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llama3.2:1b"
-USE_LLM      = False       # Default to False, will be toggled by app.py
+OLLAMA_MODEL = "llama3.1"
+USE_LLM      = True       # Default to False, will be toggled by app.py
 # app.py reads this dict to render the sidebar Ollama status widget
 LLM_LAST_STATUS: dict = {"success": None, "error": ""}
 
