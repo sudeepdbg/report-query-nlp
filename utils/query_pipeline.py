@@ -28,7 +28,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # ── LLM config ────────────────────────────────────────────────────────────────
-OLLAMA_URL   = "http://localhost:11434/api/generate"
+OLLAMA_URL   = "http://127.0.0.1:11434/api/generate"
 OLLAMA_MODEL = "llama3.1"
 USE_LLM      = True       # Default to False, will be toggled by app.py
 # app.py reads this dict to render the sidebar Ollama status widget
