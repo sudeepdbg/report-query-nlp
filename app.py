@@ -423,6 +423,7 @@ border-radius:6px;padding:4px 8px;font-size:.68rem;color:#94a3b8">⏸ No query r
 # RIGHTS EXPLORER
 # ══════════════════════════════════════════════════════════════════════════════
 def page_rights():
+    # ... (unchanged from original) ...
     reg = st.session_state.current_region
     st.markdown('<div class="page-header">🔑 Rights Explorer</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="page-sub">Content rights licensed-in for <b>{reg}</b> — windows, territories, exclusivity &amp; expiry</div>', unsafe_allow_html=True)
@@ -1669,23 +1670,45 @@ def page_custom_dashboard():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ANALYTICS
+# ANALYTICS — NEW VERSION (includes Live tab with auto-refresh & anomaly detection)
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ANALYTICS  ◄── PATCHED v5.1
-# FIXES:
-#   1. df_7d includes cross_intent column (was missing → potential KeyError)
-#   2. df_14d includes error_message column (was missing → _classify_outcome broke)
-#   3. Feedback ups/downs use .get() null-safety; empty table no longer returns 0
-#   4. _classify_outcome uses row.get() to avoid KeyError on missing column
-#   5. Quality tab: new LLM vs Rule parse-method breakdown chart
-# ══════════════════════════════════════════════════════════════════════════════
 def page_analytics():
-    st.markdown('<div class="page-header">📊 Analytics</div>', unsafe_allow_html=True)
-    st.markdown('<div class="page-sub">System health · performance · quality · adoption · KPI tracker</div>', unsafe_allow_html=True)
+    """Analytics page — Overview · Performance · Quality · Adoption · KPI · 🔴 Live"""
 
-    tabs = st.tabs(["Overview", "Performance", "Quality", "Adoption", "KPI Tracker"])
+    # ── streamlit-autorefresh (graceful fallback if not installed) ────────────
+    try:
+        from streamlit_autorefresh import st_autorefresh
+        _AR_OK = True
+    except ImportError:
+        _AR_OK = False
+
+    # ── check_anomalies (graceful fallback) ───────────────────────────────────
+    try:
+        from utils.database import check_anomalies as _check_anomalies
+    except ImportError:
+        # Fallback dummy function
+        def _check_anomalies(_conn):
+            return [{"severity": "info", "icon": "⚠️",
+                     "title": "Anomaly detection not configured",
+                     "detail": "Add check_anomalies to utils/database.py to enable anomaly detection.",
+                     "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}]
+
+    # ─────────────────────────────────────────────────────────────────────────
+    st.markdown('<div class="page-header">📊 Analytics</div>',
+                unsafe_allow_html=True)
+    st.markdown(
+        '<div class="page-sub">'
+        'System health · performance · quality · adoption · KPI tracker · '
+        '<span style="color:#ef4444;font-weight:700">● Live</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    tabs = st.tabs([
+        "Overview", "Performance", "Quality", "Adoption", "KPI Tracker",
+        "🔴 Live",
+    ])
 
     def _sql(query: str) -> pd.DataFrame:
         try:
@@ -1700,7 +1723,6 @@ def page_analytics():
     d10_start = (today - pd.Timedelta(days=9)).strftime("%Y-%m-%d")
 
     # ── Pre-fetch shared datasets ─────────────────────────────────────────────
-    # FIX 1: added cross_intent column (was missing)
     df_7d = _sql(f"""
         SELECT log_id, timestamp, session_id, success,
                COALESCE(error_message,'') AS error_message,
@@ -1708,15 +1730,12 @@ def page_analytics():
         FROM query_log
         WHERE DATE(timestamp) >= '{d7_start}'
     """)
-
-    # FIX 2: added error_message column (was missing → _classify_outcome KeyError)
     df_14d = _sql(f"""
         SELECT DATE(timestamp) AS day, success,
                COALESCE(error_message,'') AS error_message
         FROM query_log
         WHERE DATE(timestamp) >= '{d14_start}'
     """)
-
     df_fb30 = _sql(f"""
         SELECT feedback_type, COUNT(*) AS cnt
         FROM feedback
@@ -1731,19 +1750,15 @@ def page_analytics():
     p50_s     = float(np.percentile(latencies, 50)) / 1000 if len(latencies) else 0.0
     p99_s     = float(np.percentile(latencies, 99)) / 1000 if len(latencies) else 0.0
     success_r = (int(df_7d["success"].sum()) / total_q * 100) if total_q else 0.0
-
     if total_q and not df_7d.empty:
-        succ_df = df_7d[df_7d["success"] == 1]
+        succ_df      = df_7d[df_7d["success"] == 1]
         intent_match = (
             (succ_df["intent_domain"].fillna("") != "").sum() / len(succ_df) * 100
             if len(succ_df) else 100.0
         )
     else:
         intent_match = 0.0
-
     wau = int(df_7d["session_id"].nunique()) if not df_7d.empty else 0
-
-    # FIX 3: robust null-safe feedback count
     if not df_fb30.empty:
         up_rows   = df_fb30[df_fb30["feedback_type"] == "thumbs_up"]["cnt"]
         down_rows = df_fb30[df_fb30["feedback_type"] == "thumbs_down"]["cnt"]
@@ -1751,12 +1766,10 @@ def page_analytics():
         downs = int(down_rows.sum()) if not down_rows.empty else 0
     else:
         ups = downs = 0
-
     total_fb   = ups + downs
     thumbs_pct = ups / total_fb * 100 if total_fb else 0.0
     ratio_str  = f"{ups/downs:.1f}× upvotes/downvotes" if downs else "No downvotes yet"
 
-    # ── Prior-week deltas ─────────────────────────────────────────────────────
     df_prev = _sql(f"""
         SELECT log_id, session_id, success
         FROM query_log
@@ -1766,18 +1779,16 @@ def page_analytics():
     prev_total = len(df_prev)
     prev_wau   = int(df_prev["session_id"].nunique()) if not df_prev.empty else 0
     prev_sr    = float(df_prev["success"].mean() * 100) if not df_prev.empty and len(df_prev) else 0.0
-
     delta_q_val = total_q - prev_total
     delta_q     = f"{delta_q_val:+,} vs last week" if prev_total else "—"
     delta_wau   = f"{wau - prev_wau:+} vs last week" if prev_wau else "—"
     delta_sr    = f"{success_r - prev_sr:+.0f}pp vs last week" if prev_sr else "—"
 
-    # FIX 4: use row.get() so missing column never causes KeyError
     def _classify_outcome(row):
         if row.get("success") == 1:
             return "Success"
         em = str(row.get("error_message", "") or "").lower()
-        if any(k in em for k in ("block", "unsupport", "refuse", "not permit", "only select")):
+        if any(k in em for k in ("block","unsupport","refuse","not permit","only select")):
             return "Refused"
         return "Failed"
 
@@ -1787,7 +1798,6 @@ def page_analytics():
     with tabs[0]:
         st.markdown("#### SYSTEM HEALTH — AT A GLANCE")
         st.markdown("---")
-
         r1c1, r1c2, r1c3, r1c4 = st.columns(4)
         with r1c1: st.metric("Total queries (7d)", f"{total_q:,}", delta_q)
         with r1c2:
@@ -1795,14 +1805,11 @@ def page_analytics():
             st.metric("P95 response time (7d)", f"{p95_s:.1f}s", f"Target: <10s  {p95_label}")
         with r1c3: st.metric("Query success rate (7d)", f"{success_r:.0f}%", delta_sr)
         with r1c4: st.metric("Intent match rate (7d)", f"{intent_match:.0f}%", "Target: ≥95%")
-
         r2c1, r2c2, _, __ = st.columns(4)
         with r2c1: st.metric("Weekly active users", str(wau), delta_wau)
         with r2c2: st.metric("Thumbs-up ratio (30d)", f"{thumbs_pct:.0f}%", ratio_str)
-
         st.markdown("---")
         left, right = st.columns([6, 4], gap="large")
-
         with left:
             st.markdown("**Queries per day (last 14 days)**")
             st.caption("Usage volume trend")
@@ -1813,8 +1820,7 @@ def page_analytics():
                 fig_daily.update_layout(**PT, height=320, xaxis_title="", yaxis_title="")
                 st.plotly_chart(fig_daily, use_container_width=True)
             else:
-                st.info("No query data yet — run some queries in the Chat page to populate this chart.")
-
+                st.info("No query data yet.")
         with right:
             st.markdown("**Query outcome breakdown**")
             st.caption("Success vs failed vs refused")
@@ -1838,28 +1844,24 @@ def page_analytics():
     # ══════════════════════════════════════════════════════════════════════════
     with tabs[1]:
         st.markdown("#### Performance")
-
         pc1, pc2, pc3, pc4 = st.columns(4)
         pc1.metric("P50 latency (7d)", f"{p50_s:.2f}s")
         pc2.metric("P95 latency (7d)", f"{p95_s:.2f}s",
                    "🔴 Above target" if p95_s > 10 else "🟢 On target")
         pc3.metric("P99 latency (7d)", f"{p99_s:.2f}s")
         pc4.metric("Samples (7d)", f"{len(latencies):,}")
-
         st.markdown("---")
         perf_l, perf_r = st.columns(2, gap="large")
-
         with perf_l:
             st.markdown("**Latency distribution (ms)**")
             if len(latencies):
                 fig_hist = px.histogram(x=latencies, nbins=30,
                     labels={"x": "Latency (ms)", "y": "Queries"},
                     color_discrete_sequence=["#7c3aed"], template="plotly_white")
-                fig_hist.update_layout(**PT, height=300, xaxis_title="Latency (ms)", yaxis_title="Count")
+                fig_hist.update_layout(**PT, height=300)
                 st.plotly_chart(fig_hist, use_container_width=True)
             else:
                 st.info("No latency data for last 7 days.")
-
         with perf_r:
             st.markdown("**Failed queries by reason**")
             df_fail = df_7d[df_7d["success"] == 0].copy() if not df_7d.empty else pd.DataFrame()
@@ -1881,7 +1883,6 @@ def page_analytics():
                 st.plotly_chart(fig_fail, use_container_width=True)
             else:
                 st.info("No failures in last 7 days 🎉")
-
         st.markdown("---")
         st.markdown("**P95 latency trend (last 10 days)**")
         df_10d = _sql(f"""
@@ -1908,14 +1909,13 @@ def page_analytics():
                 yaxis=dict(rangemode="tozero"))
             st.plotly_chart(fig_trend, use_container_width=True)
         else:
-            st.info("Not enough data for trend chart yet — run some queries to populate it.")
+            st.info("Not enough data for trend chart yet.")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # TAB 2 — QUALITY  (PATCHED: error_message fix + NEW LLM/Rule chart)
+    # TAB 2 — QUALITY
     # ══════════════════════════════════════════════════════════════════════════
     with tabs[2]:
         st.markdown("#### Quality")
-
         if not df_14d.empty:
             df_14d_q = df_14d.copy()
             df_14d_q["outcome"] = df_14d_q.apply(_classify_outcome, axis=1)
@@ -1924,18 +1924,13 @@ def page_analytics():
             fig_stack = px.bar(stacked, x="day", y="count", color="outcome",
                 title="Query outcome breakdown per day (last 14 days)",
                 color_discrete_map=color_map, barmode="stack", template="plotly_white")
-            fig_stack.update_layout(**PT, height=340, xaxis_title="", yaxis_title="Queries")
+            fig_stack.update_layout(**PT, height=340)
             st.plotly_chart(fig_stack, use_container_width=True)
         else:
             st.info("No data yet.")
-
         st.markdown("---")
-
-        # ── FIX 5: LLM vs Rule parse-method breakdown ─────────────────────────
         st.markdown("#### Parse Method — LLM vs Rule-based (7d)")
         if not df_7d.empty and len(latencies) > 0:
-            # Heuristic: LLM adds Ollama network RTT (~200-2000ms extra).
-            # Queries with latency > 1.5× median are classified as LLM-parsed.
             median_ms = float(np.median(latencies))
             df_method = df_7d.copy()
             df_method["parse_method"] = df_method["latency_ms"].apply(
@@ -1943,7 +1938,6 @@ def page_analytics():
             )
             method_cnt = df_method["parse_method"].value_counts().reset_index()
             method_cnt.columns = ["method", "count"]
-
             pm_c1, pm_c2 = st.columns([3, 2])
             with pm_c1:
                 fig_method = px.pie(method_cnt, names="method", values="count",
@@ -1956,22 +1950,17 @@ def page_analytics():
             with pm_c2:
                 llm_cnt  = int(method_cnt.loc[method_cnt["method"]=="🤖 LLM","count"].sum()) if "🤖 LLM" in method_cnt["method"].values else 0
                 rule_cnt = int(method_cnt.loc[method_cnt["method"]=="⚙️ Rule-based","count"].sum()) if "⚙️ Rule-based" in method_cnt["method"].values else 0
-                st.metric("🤖 LLM queries (est.)",        f"{llm_cnt:,}")
+                st.metric("🤖 LLM queries (est.)", f"{llm_cnt:,}")
                 st.metric("⚙️ Rule-based queries (est.)", f"{rule_cnt:,}")
-                st.caption(
-                    "Heuristic: latency > 1.5× session median → LLM (Ollama adds network overhead). "
-                    "Enable Ollama in sidebar and run queries to see a real split."
-                )
+                st.caption("Heuristic: latency > 1.5× session median → LLM.")
         else:
-            st.info("No query data for parse method breakdown yet — run some queries in Chat first.")
-
+            st.info("No query data for parse method breakdown yet.")
         st.markdown("---")
         st.markdown("#### User Feedback (30 days)")
         fb_c1, fb_c2, fb_c3 = st.columns(3)
-        fb_c1.metric("👍 Thumbs up",   str(ups))
+        fb_c1.metric("👍 Thumbs up", str(ups))
         fb_c2.metric("👎 Thumbs down", str(downs))
-        fb_c3.metric("Ratio",          ratio_str)
-
+        fb_c3.metric("Ratio", ratio_str)
         if not df_fb30.empty and total_fb:
             fig_fb = px.pie(df_fb30, names="feedback_type", values="cnt",
                 color="feedback_type",
@@ -1980,22 +1969,19 @@ def page_analytics():
             fig_fb.update_layout(**PT, height=280)
             st.plotly_chart(fig_fb, use_container_width=True)
         else:
-            st.info("No feedback yet — use 👍 / 👎 in Chat to record feedback.")
+            st.info("No feedback yet.")
 
     # ══════════════════════════════════════════════════════════════════════════
     # TAB 3 — ADOPTION
     # ══════════════════════════════════════════════════════════════════════════
     with tabs[3]:
         st.markdown("#### Adoption")
-
         adp_c1, adp_c2, adp_c3 = st.columns(3)
         adp_c1.metric("Weekly active users (7d)", str(wau))
         adp_c2.metric("Total queries (7d)", f"{total_q:,}")
         qpu = round(total_q / wau, 1) if wau else 0.0
         adp_c3.metric("Avg queries / user (7d)", str(qpu))
-
         st.markdown("---")
-
         df_sess = _sql(f"""
             SELECT DATE(start_time) AS day, COUNT(*) AS sessions
             FROM user_session
@@ -2006,11 +1992,10 @@ def page_analytics():
             fig_sess = px.bar(df_sess, x="day", y="sessions",
                 title="New sessions per day (last 14 days)",
                 color_discrete_sequence=["#7c3aed"], template="plotly_white")
-            fig_sess.update_layout(**PT, height=300, xaxis_title="", yaxis_title="Sessions")
+            fig_sess.update_layout(**PT, height=300)
             st.plotly_chart(fig_sess, use_container_width=True)
         else:
             st.info("No session data yet.")
-
         st.markdown("---")
         st.markdown("**Top intent domains (7d)**")
         if not df_7d.empty:
@@ -2024,11 +2009,10 @@ def page_analytics():
                     title="", color_discrete_sequence=["#7c3aed"], template="plotly_white")
                 fig_intent.update_layout(**PT,
                     height=max(260, len(top_intent) * 36 + 60),
-                    yaxis=dict(autorange="reversed"), xaxis_title="Queries", yaxis_title="")
+                    yaxis=dict(autorange="reversed"))
                 st.plotly_chart(fig_intent, use_container_width=True)
             else:
                 st.info("No intent data yet.")
-
         st.markdown("**Top chart types requested (7d)**")
         if not df_7d.empty and "chart_type" in df_7d.columns:
             ct_cnt = (
@@ -2048,7 +2032,6 @@ def page_analytics():
     # ══════════════════════════════════════════════════════════════════════════
     with tabs[4]:
         st.markdown("#### KPI Tracker")
-
         failed_rate = 100.0 - success_r
         qpu_val     = round(total_q / wau, 1) if wau else 0.0
 
@@ -2068,15 +2051,427 @@ def page_analytics():
             {"Metric": "Failed query rate",   "Target": "< 10%", "Actual": f"{failed_rate:.0f}%","Status": _status(failed_rate,  10,  False),  "Deadline": "30 Jun"},
             {"Metric": "Queries / user (7d)", "Target": "≥ 5",   "Actual": str(qpu_val),          "Status": _status(qpu_val,      5),           "Deadline": "30 Jun"},
         ]
-
         st.markdown("##### P0 Metrics — deadline 30 April")
         st.dataframe(pd.DataFrame(p0_rows), use_container_width=True, hide_index=True)
-
         st.markdown("##### P1 Metrics — deadline 30 June")
         st.dataframe(pd.DataFrame(p1_rows), use_container_width=True, hide_index=True)
+        st.markdown("---")
+        st.caption(
+            f"All metrics computed live from `query_log` · `feedback` · `user_session` · "
+            f"last updated {datetime.now().strftime('%H:%M · %d %b %Y')}"
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 5 — 🔴 LIVE
+    # ══════════════════════════════════════════════════════════════════════════
+    with tabs[5]:
+        # ── Header + auto-refresh toggle ────────────────────────────────────
+        hdr_l, hdr_r = st.columns([4, 2])
+        with hdr_l:
+            st.markdown(
+                '<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">'
+                '<div style="width:10px;height:10px;border-radius:50%;background:#ef4444;'
+                'animation:pulse 1.5s infinite" id="live-dot"></div>'
+                '<span style="font-size:1.15rem;font-weight:800;color:#0f172a">Live Dashboard</span>'
+                '</div>'
+                '<div style="font-size:.78rem;color:#64748b">'
+                'Real-time view — auto-refreshes every 5 seconds when enabled'
+                '</div>'
+                '<style>'
+                '@keyframes pulse{'
+                '0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.5)}'
+                '50%{box-shadow:0 0 0 6px rgba(239,68,68,0)}'
+                '}'
+                '#live-dot{animation:pulse 1.5s ease-in-out infinite}'
+                '</style>',
+                unsafe_allow_html=True,
+            )
+        with hdr_r:
+            auto_refresh = st.toggle(
+                "⚡ Auto-refresh (5 s)",
+                value=False,
+                key="live_autorefresh",
+                help="When ON the page reruns every 5 seconds.",
+            )
+
+        # ── Trigger auto-refresh ─────────────────────────────────────────────
+        refresh_count = 0
+        if auto_refresh:
+            if _AR_OK:
+                # st_autorefresh returns an int counter each time it fires
+                refresh_count = st_autorefresh(interval=5000, limit=None,
+                                               key="live_ar_counter")
+            else:
+                st.warning(
+                    "⚠️ `streamlit-autorefresh` is not installed. "
+                    "Run `pip install streamlit-autorefresh` and restart the app.",
+                    icon="📦",
+                )
+
+        # ── Timestamp strip ───────────────────────────────────────────────────
+        now_ts = datetime.now().strftime("%H:%M:%S · %d %b %Y")
+        refresh_label = f"Refresh #{refresh_count}" if refresh_count else "Manual"
+        st.markdown(
+            f'<div style="display:flex;justify-content:space-between;'
+            f'align-items:center;padding:6px 12px;background:#f0fdf4;'
+            f'border:1px solid #bbf7d0;border-radius:8px;margin:8px 0 16px">'
+            f'<span style="font-size:.75rem;color:#166534;font-weight:600">'
+            f'🕐 Last updated: {now_ts}</span>'
+            f'<span style="font-size:.72rem;color:#4ade80">{refresh_label}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Row 1: headline live metrics ──────────────────────────────────────
+        lm1, lm2, lm3, lm4 = st.columns(4)
+
+        df_active_sess = _sql("""
+            SELECT session_id, region, persona, start_time
+            FROM user_session
+            WHERE end_time IS NULL
+               OR start_time >= datetime('now', '-5 minutes')
+            ORDER BY start_time DESC
+        """)
+        active_sess_count = len(df_active_sess)
+
+        df_current_q = _sql("""
+            SELECT log_id, session_id, timestamp, intent_domain,
+                   question, latency_ms, rows_returned, success,
+                   COALESCE(error_message,'') AS error_message,
+                   chart_type
+            FROM query_log
+            WHERE timestamp >= datetime('now', '-60 seconds')
+            ORDER BY timestamp DESC
+        """)
+        current_q_count = len(df_current_q)
+
+        df_recent_err = _sql("""
+            SELECT log_id, timestamp, session_id,
+                   COALESCE(question,'') AS question,
+                   COALESCE(error_message,'') AS error_message,
+                   intent_domain, latency_ms
+            FROM query_log
+            WHERE success = 0
+            ORDER BY timestamp DESC
+            LIMIT 10
+        """)
+        recent_err_count = len(df_recent_err)
+
+        # Queries per minute (rolling 60 s)
+        qpm = current_q_count  # queries in last 60 s ≈ per-minute rate
+
+        with lm1:
+            st.markdown(
+                f'<div class="stat-tile">'
+                f'<div class="val" style="color:#1e40af">{active_sess_count}</div>'
+                f'<div class="lbl">Active Sessions</div>'
+                f'</div>', unsafe_allow_html=True)
+        with lm2:
+            st.markdown(
+                f'<div class="stat-tile">'
+                f'<div class="val" style="color:#166534">{current_q_count}</div>'
+                f'<div class="lbl">Queries (last 60 s)</div>'
+                f'</div>', unsafe_allow_html=True)
+        with lm3:
+            err_color = "#991b1b" if recent_err_count > 0 else "#166534"
+            st.markdown(
+                f'<div class="stat-tile">'
+                f'<div class="val" style="color:{err_color}">{recent_err_count}</div>'
+                f'<div class="lbl">Recent Errors (top 10)</div>'
+                f'</div>', unsafe_allow_html=True)
+        with lm4:
+            st.markdown(
+                f'<div class="stat-tile">'
+                f'<div class="val" style="color:#5b21b6">{qpm}</div>'
+                f'<div class="lbl">Queries / min</div>'
+                f'</div>', unsafe_allow_html=True)
 
         st.markdown("---")
-        st.caption(f"All metrics computed live from `query_log` · `feedback` · `user_session` · refreshed on page load · last updated {datetime.now().strftime('%H:%M · %d %b %Y')}")
+
+        # ── Row 2: Active sessions + Current queries ──────────────────────────
+        sess_col, qlog_col = st.columns(2, gap="large")
+
+        with sess_col:
+            st.markdown(
+                '<div style="font-size:.9rem;font-weight:700;color:#1e40af;'
+                'margin-bottom:6px">👤 Active Sessions</div>',
+                unsafe_allow_html=True,
+            )
+            if df_active_sess.empty:
+                st.markdown(
+                    '<div style="background:#eff6ff;border:1px solid #bfdbfe;'
+                    'border-radius:8px;padding:14px;text-align:center;'
+                    'font-size:.8rem;color:#1e40af">No active sessions right now</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                # Render as compact cards
+                for _, row in df_active_sess.iterrows():
+                    ts = str(row.get("start_time", ""))[:16]
+                    region  = row.get("region", "—")
+                    persona = row.get("persona", "—")
+                    sid     = str(row.get("session_id", ""))[:8]
+                    st.markdown(
+                        f'<div style="display:flex;justify-content:space-between;'
+                        f'align-items:center;background:#eff6ff;border:1px solid #bfdbfe;'
+                        f'border-radius:8px;padding:8px 12px;margin-bottom:4px">'
+                        f'<div>'
+                        f'<span style="font-size:.78rem;font-weight:700;color:#1e40af">'
+                        f'…{sid}</span>'
+                        f'<span class="badge badge-blue" style="margin-left:6px">{region}</span>'
+                        f'<span class="badge badge-purple">{persona}</span>'
+                        f'</div>'
+                        f'<span style="font-size:.68rem;color:#64748b">{ts}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+        with qlog_col:
+            st.markdown(
+                '<div style="font-size:.9rem;font-weight:700;color:#166534;'
+                'margin-bottom:6px">⚡ Current Queries (last 60 s)</div>',
+                unsafe_allow_html=True,
+            )
+            if df_current_q.empty:
+                st.markdown(
+                    '<div style="background:#f0fdf4;border:1px solid #bbf7d0;'
+                    'border-radius:8px;padding:14px;text-align:center;'
+                    'font-size:.8rem;color:#166534">No queries in the last 60 seconds</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                for _, row in df_current_q.iterrows():
+                    ts      = str(row.get("timestamp", ""))[-8:]   # HH:MM:SS
+                    domain  = str(row.get("intent_domain", "—") or "—")
+                    lat_ms  = row.get("latency_ms", 0) or 0
+                    lat_s   = f"{float(lat_ms)/1000:.1f}s"
+                    success = row.get("success", 1)
+                    rows_r  = int(row.get("rows_returned", 0) or 0)
+                    q_txt   = str(row.get("question", "") or "")[:55]
+                    if not q_txt:
+                        q_txt = f"[{domain}]"
+                    status_badge = (
+                        '<span class="badge badge-green">✓</span>'
+                        if success else
+                        '<span class="badge badge-red">✗</span>'
+                    )
+                    lat_color = "#991b1b" if float(lat_ms) > 10000 else "#166534"
+                    st.markdown(
+                        f'<div style="background:#f0fdf4;border:1px solid #bbf7d0;'
+                        f'border-radius:8px;padding:8px 12px;margin-bottom:4px">'
+                        f'<div style="display:flex;justify-content:space-between;'
+                        f'align-items:center">'
+                        f'<span style="font-size:.78rem;font-weight:600;color:#0f172a">'
+                        f'{html.escape(q_txt)}</span>'
+                        f'{status_badge}'
+                        f'</div>'
+                        f'<div style="display:flex;gap:8px;margin-top:3px">'
+                        f'<span style="font-size:.68rem;color:#64748b">{ts}</span>'
+                        f'<span class="badge badge-green">{domain}</span>'
+                        f'<span style="font-size:.68rem;font-weight:700;color:{lat_color}">'
+                        f'{lat_s}</span>'
+                        f'<span style="font-size:.68rem;color:#94a3b8">{rows_r} rows</span>'
+                        f'</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+        st.markdown("---")
+
+        # ── Row 3: Recent errors + Ollama health ──────────────────────────────
+        err_col, health_col = st.columns(2, gap="large")
+
+        with err_col:
+            st.markdown(
+                '<div style="font-size:.9rem;font-weight:700;color:#991b1b;'
+                'margin-bottom:6px">🚨 Recent Errors (last 10)</div>',
+                unsafe_allow_html=True,
+            )
+            if df_recent_err.empty:
+                st.markdown(
+                    '<div style="background:#fef2f2;border:1px solid #fecaca;'
+                    'border-radius:8px;padding:14px;text-align:center;'
+                    'font-size:.8rem;color:#166534">🎉 No errors — system healthy</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                for _, row in df_recent_err.iterrows():
+                    ts  = str(row.get("timestamp", ""))[:16]
+                    em  = str(row.get("error_message", "") or "Unknown error")[:80]
+                    dom = str(row.get("intent_domain", "—") or "—")
+                    q_t = str(row.get("question", "") or "")[:45]
+                    lat = f"{float(row.get('latency_ms',0) or 0)/1000:.1f}s"
+                    st.markdown(
+                        f'<div style="background:#fef2f2;border:1px solid #fecaca;'
+                        f'border-left:3px solid #ef4444;border-radius:8px;'
+                        f'padding:8px 12px;margin-bottom:4px">'
+                        f'<div style="font-size:.78rem;font-weight:700;color:#991b1b">'
+                        f'{html.escape(em)}</div>'
+                        f'<div style="display:flex;gap:8px;margin-top:3px">'
+                        f'<span style="font-size:.65rem;color:#94a3b8">{ts}</span>'
+                        f'<span class="badge badge-red">{dom}</span>'
+                        f'<span style="font-size:.65rem;color:#64748b">{lat}</span>'
+                        f'</div>'
+                        f'{"<div style=font-size:.65rem;color:#64748b;margin-top:2px>" + html.escape(q_t) + "</div>" if q_t else ""}'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+        with health_col:
+            st.markdown(
+                '<div style="font-size:.9rem;font-weight:700;color:#5b21b6;'
+                'margin-bottom:6px">🤖 Ollama Health</div>',
+                unsafe_allow_html=True,
+            )
+            # Ping Ollama with a minimal dummy request
+            ollama_ok    = False
+            ollama_ms    = 0
+            ollama_error = ""
+            ollama_model = ""
+            try:
+                import requests as _req
+                t0_ol = time.time()
+                _resp = _req.post(
+                    "http://localhost:11434/api/generate",
+                    json={
+                        "model":  "llama3.1",
+                        "prompt": "ping",
+                        "stream": False,
+                        "options": {"num_predict": 1},   # 1 token → fast health-check
+                    },
+                    timeout=5,
+                )
+                ollama_ms = int((time.time() - t0_ol) * 1000)
+                if _resp.status_code == 200:
+                    ollama_ok    = True
+                    ollama_model = _resp.json().get("model", "llama3.1")
+                else:
+                    ollama_error = f"HTTP {_resp.status_code}"
+            except Exception as _e:
+                ollama_error = str(_e)[:80]
+                ollama_ms    = int((time.time() - t0_ol) * 1000) if 't0_ol' in dir() else 0
+
+            if ollama_ok:
+                st.markdown(
+                    f'<div style="background:#f0fdf4;border:1px solid #bbf7d0;'
+                    f'border-radius:10px;padding:16px 18px">'
+                    f'<div style="font-size:1.4rem;font-weight:800;color:#166534">'
+                    f'✅ Healthy</div>'
+                    f'<div style="font-size:.8rem;color:#4ade80;margin-top:4px">'
+                    f'Model: <b>{html.escape(ollama_model)}</b></div>'
+                    f'<div style="font-size:.75rem;color:#64748b;margin-top:2px">'
+                    f'Response time: <b>{ollama_ms} ms</b></div>'
+                    f'<div style="font-size:.68rem;color:#94a3b8;margin-top:4px">'
+                    f'Endpoint: http://localhost:11434</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f'<div style="background:#fef2f2;border:1px solid #fecaca;'
+                    f'border-radius:10px;padding:16px 18px">'
+                    f'<div style="font-size:1.4rem;font-weight:800;color:#991b1b">'
+                    f'❌ Unreachable</div>'
+                    f'<div style="font-size:.8rem;color:#ef4444;margin-top:4px">'
+                    f'{html.escape(ollama_error)}</div>'
+                    f'<div style="font-size:.75rem;color:#64748b;margin-top:6px">'
+                    f'Run <code>ollama serve</code> and ensure '
+                    f'<code>llama3.1</code> is pulled.</div>'
+                    f'<div style="font-size:.68rem;color:#94a3b8;margin-top:4px">'
+                    f'Endpoint: http://localhost:11434</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+            # Mini Ollama RTT sparkline (last 20 queries with latency)
+            df_lat_spark = _sql("""
+                SELECT timestamp, latency_ms FROM query_log
+                WHERE latency_ms IS NOT NULL
+                ORDER BY timestamp DESC LIMIT 20
+            """)
+            if not df_lat_spark.empty:
+                df_lat_spark = df_lat_spark.iloc[::-1].reset_index(drop=True)
+                fig_spark = go.Figure(go.Scatter(
+                    x=df_lat_spark.index,
+                    y=df_lat_spark["latency_ms"] / 1000,
+                    mode="lines",
+                    line=dict(color="#7c3aed", width=1.5),
+                    fill="tozeroy",
+                    fillcolor="rgba(124,58,237,.08)",
+                ))
+                fig_spark.update_layout(
+                    height=100, margin=dict(l=0, r=0, t=0, b=0),
+                    plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+                    xaxis=dict(visible=False), yaxis=dict(visible=False),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_spark, use_container_width=True,
+                                key="live_spark")
+                st.caption("Query latency sparkline (last 20 queries, seconds)")
+
+        st.markdown("---")
+
+        # ── Row 4: Anomalies ──────────────────────────────────────────────────
+        st.markdown(
+            '<div style="font-size:.9rem;font-weight:700;color:#0f172a;'
+            'margin-bottom:8px">🔍 Anomaly Detection</div>',
+            unsafe_allow_html=True,
+        )
+        try:
+            anomalies = _check_anomalies(DB_CONN)
+        except Exception as _ae:
+            anomalies = [{
+                "severity": "info",
+                "icon": "⚠️",
+                "title": "Anomaly check failed",
+                "detail": str(_ae)[:120],
+                "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }]
+
+        _SEV_COLORS = {
+            "critical": ("#fef2f2", "#fecaca", "#ef4444", "#991b1b"),
+            "warning":  ("#fefce8", "#fde68a", "#f59e0b", "#92400e"),
+            "info":     ("#f0fdf4", "#bbf7d0", "#10b981", "#166534"),
+        }
+        an_cols_per_row = 2
+        for i in range(0, len(anomalies), an_cols_per_row):
+            an_cols = st.columns(an_cols_per_row)
+            for j in range(an_cols_per_row):
+                idx = i + j
+                if idx >= len(anomalies):
+                    break
+                an = anomalies[idx]
+                sev = an.get("severity", "info")
+                bg, border, acc, txt = _SEV_COLORS.get(sev, _SEV_COLORS["info"])
+                with an_cols[j]:
+                    st.markdown(
+                        f'<div style="background:{bg};border:1px solid {border};'
+                        f'border-left:4px solid {acc};border-radius:10px;'
+                        f'padding:12px 16px;margin-bottom:8px">'
+                        f'<div style="display:flex;align-items:center;gap:8px">'
+                        f'<span style="font-size:1.2rem">{an.get("icon","ℹ️")}</span>'
+                        f'<span style="font-size:.85rem;font-weight:700;color:{txt}">'
+                        f'{html.escape(an.get("title",""))}</span>'
+                        f'</div>'
+                        f'<div style="font-size:.75rem;color:#475569;margin-top:6px;'
+                        f'line-height:1.5">'
+                        f'{html.escape(an.get("detail",""))}</div>'
+                        f'<div style="font-size:.65rem;color:#94a3b8;margin-top:4px">'
+                        f'{an.get("ts","")}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+        # ── Footer refresh hint ───────────────────────────────────────────────
+        st.markdown(
+            f'<div style="margin-top:8px;padding:8px 12px;background:#f8fafc;'
+            f'border:1px solid #e2e8f0;border-radius:8px;'
+            f'font-size:.72rem;color:#94a3b8;text-align:center">'
+            f'{"⚡ Auto-refresh ON — page reruns every 5 s" if auto_refresh else "⏸ Auto-refresh OFF — toggle above to enable · or navigate away and back to refresh manually"}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
 
 # ROUTER
 # ══════════════════════════════════════════════════════════════════════════════
