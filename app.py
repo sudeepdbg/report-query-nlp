@@ -1660,7 +1660,8 @@ with gcols[ci2]:
             if not dfp.empty:
                 nc_ = [c for c in dfp.columns if pd.api.types.is_numeric_dtype(dfp[c])]
                 raw = dfp[nc_[0]].iloc[0] if nc_ else dfp.iloc[0,-1]
-                try: v=float(raw); disp=f"{v:,.0f}" if v==int(v) else f"{v:,.2f}"
+               # try: v=float(raw); disp=f"{v:,.0f}" if v==int(v) else f"{v:,.2f}"
+                                 try: v=float(raw); disp=(f"{v:,.0f}" if v==int(v) else f"{v:,.2f}")
                 except: disp=str(raw)
                                      st.markdown(f'<div class="db-metric-card" style="padding:14px 18px"><div class="db-metric-value" style="font-size:2rem">{disp}</div><div class="db-metric-sub">{html.escape(pin["title"])}</div></div>', unsafe_allow_html=True)
                 #st.markdown(f'<div class="db-metric-card" style="padding:14px 18px"><div class="db-metric-value" style="font-size:2rem">{disp}</div><div class="db-metric-sub">{html.escape(pin["title"])}</div></div>', unsafe_allow_html=True)  # ← ADDED )
