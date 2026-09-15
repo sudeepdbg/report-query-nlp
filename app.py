@@ -1649,33 +1649,30 @@ def page_custom_dashboard():
                 pi = rs + ci2
                 if pi >= len(pins): break
                 pin = pins[pi]
-with gcols[ci2]:
-    st.markdown(f'<div class="db-card-header"><span class="db-card-title">{html.escape(pin["title"])}</span><span class="db-card-ts">{pin["ts"]}</span></div>', unsafe_allow_html=True)
-    with st.container(border=True):
-        st.markdown(f'<div style="margin-bottom:6px"><span class="db-query-pill">📍 {pin["region"]}</span><span class="db-query-pill">chart: {pin["chart_type"]}</span></div>', unsafe_allow_html=True)
-        if pin["fig"] is not None:
-            st.plotly_chart(pin["fig"], use_container_width=True, key=f"pin_{pi}_{hash(pin['ts'])}")
-        else:
-            dfp = pin["df"]
-            if not dfp.empty:
-                nc_ = [c for c in dfp.columns if pd.api.types.is_numeric_dtype(dfp[c])]
-                raw = dfp[nc_[0]].iloc[0] if nc_ else dfp.iloc[0,-1]
-               # try: v=float(raw); disp=f"{v:,.0f}" if v==int(v) else f"{v:,.2f}"
-                                 try: v=float(raw); disp=(f"{v:,.0f}" if v==int(v) else f"{v:,.2f}")
-                except: disp=str(raw)
-                                     st.markdown(f'<div class="db-metric-card" style="padding:14px 18px"><div class="db-metric-value" style="font-size:2rem">{disp}</div><div class="db-metric-sub">{html.escape(pin["title"])}</div></div>', unsafe_allow_html=True)
-                #st.markdown(f'<div class="db-metric-card" style="padding:14px 18px"><div class="db-metric-value" style="font-size:2rem">{disp}</div><div class="db-metric-sub">{html.escape(pin["title"])}</div></div>', unsafe_allow_html=True)  # ← ADDED )
-            pa, pb = st.columns(2)
-            with pa: st.download_button(" CSV", pin["df"].to_csv(index=False), f"pin_{pi}.csv","text/csv",key=f"pin_dl_{pi}",use_container_width=True)
-            with pb:
-                if st.button(" Unpin",key=f"pin_rm_{pi}",use_container_width=True):
-                    st.session_state.dashboard_pins.pop(pi); st.rerun()
-                     
-         
-
-# ... end of page_custom_dashboard() ...
-                        if st.button("✕ Unpin",key=f"pin_rm_{pi}",use_container_width=True):
-                            st.session_state.dashboard_pins.pop(pi); st.rerun()
+                with gcols[ci2]:
+                    st.markdown(f'<div class="db-card-header"><span class="db-card-title">{html.escape(pin["title"])}</span><span class="db-card-ts">{pin["ts"]}</span></div>', unsafe_allow_html=True)
+                    with st.container(border=True):
+                        st.markdown(f'<div style="margin-bottom:6px"><span class="db-query-pill">📍 {pin["region"]}</span><span class="db-query-pill">chart: {pin["chart_type"]}</span></div>', unsafe_allow_html=True)
+                        if pin["fig"] is not None:
+                            st.plotly_chart(pin["fig"], use_container_width=True, key=f"pin_{pi}_{hash(pin['ts'])}")
+                        else:
+                            dfp = pin["df"]
+                            if not dfp.empty:
+                                nc_ = [c for c in dfp.columns if pd.api.types.is_numeric_dtype(dfp[c])]
+                                raw = dfp[nc_[0]].iloc[0] if nc_ else dfp.iloc[0, -1]
+                                try:
+                                    v = float(raw)
+                                    disp = f"{v:,.0f}" if v == int(v) else f"{v:,.2f}"
+                                except Exception:
+                                    disp = str(raw)
+                                st.markdown(f'<div class="db-metric-card" style="padding:14px 18px"><div class="db-metric-value" style="font-size:2rem">{disp}</div><div class="db-metric-sub">{html.escape(pin["title"])}</div></div>', unsafe_allow_html=True)
+                        pa, pb = st.columns(2)
+                        with pa:
+                            st.download_button("📥 CSV", pin["df"].to_csv(index=False), f"pin_{pi}.csv", "text/csv", key=f"pin_dl_{pi}", use_container_width=True)
+                        with pb:
+                            if st.button("✕ Unpin", key=f"pin_rm_{pi}", use_container_width=True):
+                                st.session_state.dashboard_pins.pop(pi)
+                                st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1874,226 +1871,6 @@ def _mock_vantage_resolve(question: str) -> dict:
         "group_by": ["partner"],
         "filters": {"region": region, "partner": None, "period_start":"2026-04-01","period_end":"2026-06-30"},
     }
-# ... end of page_custom_dashboard() ...
-                        if st.button("✕ Unpin",key=f"pin_rm_{pi}",use_container_width=True):
-                            st.session_state.dashboard_pins.pop(pi); st.rerun()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# DISTRIBUTION SEMANTIC LAYER POC  ◄── NEW PAGE STARTS HERE
-# ══════════════════════════════════════════════════════════════════════════════
-try:
-    from utils.semantic_layer import (
-        list_metrics, get_metric, compatible_dimensions, build_query, METRICS
-    )
-    SEMANTIC_LAYER_AVAILABLE = True
-except ImportError:
-    SEMANTIC_LAYER_AVAILABLE = False
-
-def page_dist_poc():
-    """Proves: Define Once → Reuse in UI → Reuse in Vantage NL"""
-    if not SEMANTIC_LAYER_AVAILABLE:
-        st.error("❌ `utils/semantic_layer.py` is missing. Please create it before using this POC page.")
-        return
-
-    reg = st.session_state.current_region
-    st.markdown('<div class="page-header">📦 Distribution — Semantic Layer POC</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="page-sub">Proves: <b>(1) define once</b> · <b>(2) reuse across dashboards</b> · <b>(3) same objects power Vantage NL</b></div>',
-        unsafe_allow_html=True,
-    )
-
-    # Three-proof banner
-    st.markdown(
-        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">'
-        '<div class="stat-tile"><div class="val" style="color:#166534">✓</div><div class="lbl">Define Once</div></div>'
-        '<div class="stat-tile"><div class="val" style="color:#1e40af">✓</div><div class="lbl">Reuse in UI</div></div>'
-        '<div class="stat-tile"><div class="val" style="color:#5b21b6">✓</div><div class="lbl">Reuse in Vantage</div></div>'
-        '</div>', unsafe_allow_html=True,
-    )
-
-    tab_ui, tab_vantage, tab_catalog, tab_proof = st.tabs([
-        "🎛 Dashboard Builder", "💬 Vantage NL", "📚 Metric Catalog", "🔬 Proof"
-    ])
-
-    # ── TAB 1: GOVERNED DASHBOARD BUILDER ────────────────────────────────
-    with tab_ui:
-        c1, c2, c3 = st.columns([2,2,1])
-        metric_key = c1.selectbox(
-            "Select governed metric",
-            [m.key for m in list_metrics()],
-            format_func=lambda k: f"{METRICS[k].name}  —  {METRICS[k].business_question[:50]}…",
-            key="dist_metric_sel",
-        )
-        dims = compatible_dimensions(metric_key)
-        group_by = c2.multiselect(
-            "Break down by",
-            [d.key for d in dims],
-            default=["partner"] if "partner" in [d.key for d in dims] else [],
-            format_func=lambda k: {"date":"Date","partner":"Partner","market":"Market","region":"Region","title":"Title","offering":"Offering"}[k],
-            key="dist_dims_sel",
-        )
-        chart_type = c3.selectbox("Chart", ["bar","line","pie","table"], key="dist_chart")
-
-        f1, f2, f3 = st.columns(3)
-        filter_region  = f1.selectbox("Region filter",  ["All","NA","LATAM","EMEA","APAC"], key="dist_f_region")
-        filter_partner = f2.selectbox("Partner filter", ["All","HBO Max","Roku","Amazon","Netflix"], key="dist_f_partner")
-        filter_period  = f3.selectbox("Period",         ["2026-Q2","2026-Q1","2025-Q4"], key="dist_f_period")
-
-        filters = {
-            "region":  None if filter_region  == "All" else filter_region,
-            "partner": None if filter_partner == "All" else filter_partner,
-            "period_start": "2026-04-01", "period_end": "2026-06-30",
-        }
-
-        if st.button("▶ Build dashboard view", type="primary", key="dist_build"):
-            sql = build_query(metric_key, group_by or ["partner"], filters)
-            mock_df = _mock_distribution_data(metric_key, group_by or ["partner"], filters)
-
-            st.markdown(
-                f'<div style="background:#f8faff;border:1px solid #c7d2fe;border-radius:10px;padding:12px 16px;margin:10px 0">'
-                f'<div style="font-size:.72rem;font-weight:700;color:#4f46e5;text-transform:uppercase;letter-spacing:.06em">Semantic request generated</div>'
-                f'<div style="font-size:.78rem;color:#0f172a;margin-top:4px"><b>Metric:</b> {METRICS[metric_key].name} · '
-                f'<b>Grain:</b> {METRICS[metric_key].grain} · <b>Owner:</b> {METRICS[metric_key].owner}</div>'
-                f'<div class="sql-box" style="margin-top:8px">{html.escape(sql)}</div>'
-                f'</div>', unsafe_allow_html=True,
-            )
-
-            # Render chart using existing helper
-            if chart_type == "bar":
-                fig = bar(mock_df, "partner", metric_key, f"{METRICS[metric_key].name} by Partner", h=320, horiz=True)
-                st.plotly_chart(fig, use_container_width=True)
-            elif chart_type == "pie":
-                fig = pie(mock_df, "partner", metric_key, f"{METRICS[metric_key].name} Share")
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.dataframe(mock_df, use_container_width=True, hide_index=True)
-
-            # Transparency panel
-            with st.expander("🔍 Why this number? (transparency)"):
-                m = METRICS[metric_key]
-                st.markdown(f"**Definition:** {m.definition}")
-                st.markdown(f"**Formula:** `{m.formula}`")
-                st.markdown(f"**Grain:** {m.grain}")
-                st.markdown(f"**Owner:** {m.owner} · **Steward:** {m.steward} · **Status:** {m.status}")
-
-    # ── TAB 2: VANTAGE NL ─────────────────────────────────────────────────
-    with tab_vantage:
-        st.markdown("#### 💬 Ask in natural language — resolves to the SAME semantic objects")
-        nl_q = st.text_input(
-            "Ask Vantage",
-            value="Show me Active Offerings by Partner in LATAM for Q2 2026",
-            key="dist_nl_q",
-        )
-        if st.button("▶ Run Vantage query", key="dist_nl_run"):
-            resolved = _mock_vantage_resolve(nl_q)
-            st.markdown(
-                f'<div style="background:#ede9fe;border:1px solid #c4b5fd;border-radius:10px;padding:12px 16px">'
-                f'<div style="font-size:.72rem;font-weight:700;color:#5b21b6;text-transform:uppercase">Vantage → Semantic Layer</div>'
-                f'<div style="font-size:.82rem;color:#0f172a;margin-top:6px">'
-                f'<b>Resolved metric:</b> {resolved["metric_name"]}<br>'
-                f'<b>Dimensions:</b> {", ".join(resolved["group_by"])}<br>'
-                f'<b>Filters:</b> {resolved["filters"]}<br>'
-                f'<b>Same definition as Dashboard UI?</b> <span style="color:#166534;font-weight:700">✅ YES</span>'
-                f'</div></div>', unsafe_allow_html=True,
-            )
-            sql = build_query(resolved["metric_key"], resolved["group_by"], resolved["filters"])
-            mock_df = _mock_distribution_data(resolved["metric_key"], resolved["group_by"], resolved["filters"])
-            st.markdown(f'<div class="sql-box">{html.escape(sql)}</div>', unsafe_allow_html=True)
-            fig = bar(mock_df, "partner", resolved["metric_key"], f"Vantage: {resolved['metric_name']}", h=320, horiz=True)
-            st.plotly_chart(fig, use_container_width=True)
-
-    # ── TAB 3: METRIC CATALOG ─────────────────────────────────────────────
-    with tab_catalog:
-        st.markdown("#### 📚 Certified Metric Contracts (single source of truth)")
-        for m in list_metrics():
-            with st.expander(f"✅ {m.name}  —  {m.business_question}"):
-                c1, c2 = st.columns([2,1])
-                with c1:
-                    st.markdown(f"**Definition:** {m.definition}")
-                    st.markdown(f"**Formula:** `{m.formula}`")
-                    st.markdown(f"**Grain:** {m.grain}")
-                    st.markdown(f"**Required dimensions:** {', '.join(m.required_dimensions)}")
-                with c2:
-                    st.markdown(f"**Owner:** {m.owner}")
-                    st.markdown(f"**Steward:** {m.steward}")
-                    st.markdown(f"**Status:** `{m.status}`")
-
-    # ─ TAB 4: PROOF POINTS ───────────────────────────────────────────────
-    with tab_proof:
-        st.markdown("#### 🔬 POC Proof Points")
-        proofs = [
-            ("1. Define Once, Reuse Everywhere",
-             "The 5 metrics above are defined in `utils/semantic_layer.py` exactly once. "
-             "Changing `METRICS['otd_pct'].formula` updates every dashboard and every Vantage answer."),
-            ("2. Multiple Dashboards, Same Definitions",
-             "Dashboard A (Executive KPI) and Dashboard B (Partner Performance) both call `build_query()` "
-             "— they store only their selections, never a copy of the KPI SQL."),
-            ("3. Vantage + UI Speak the Same Language",
-             "Run a Vantage NL query in Tab 2 and a Dashboard UI query in Tab 1 with the same parameters. "
-             "The generated SQL is identical — proving AI and human builders share one governed contract."),
-        ]
-        for title, body in proofs:
-            st.markdown(
-                f'<div style="background:#fff;border:1px solid #e2e8f0;border-left:4px solid #7c3aed;'
-                f'border-radius:10px;padding:14px 18px;margin-bottom:10px">'
-                f'<div style="font-size:.95rem;font-weight:800;color:#0f172a">{title}</div>'
-                f'<div style="font-size:.82rem;color:#475569;margin-top:6px;line-height:1.5">{body}</div>'
-                f'</div>', unsafe_allow_html=True,
-            )
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# POC MOCK HELPERS (Remove when real DW is connected)
-# ══════════════════════════════════════════════════════════════════════════════
-def _mock_distribution_data(metric_key, group_by, filters):
-    import random
-    random.seed(hash(metric_key) + hash(str(filters)))
-    partners = ["HBO Max","Roku","Amazon","Netflix","Apple TV+"]
-    markets  = ["US","Mexico","UK","Brazil","Germany"]
-    rows = []
-    for p in partners[:3]:
-        rows.append({
-            "partner": p,
-            "market":  random.choice(markets),
-            "region":  filters.get("region") or "LATAM",
-            metric_key: random.randint(50, 500) if "pct" not in metric_key else round(random.uniform(75, 98), 1),
-        })
-    return pd.DataFrame(rows)
-
-def _mock_vantage_resolve(question: str) -> dict:
-    q = question.lower()
-    if "active offering" in q:   mk = "active_offerings"
-    elif "otd" in q or "on time" in q: mk = "otd_pct"
-    elif "footprint" in q or "available" in q: mk = "distribution_footprint"
-    elif "asset" in q or "delivered" in q: mk = "delivered_asset_volume"
-    else: mk = "distributions"
-    region = next((r for r in ["LATAM","EMEA","APAC","NA"] if r.lower() in q), None)
-    return {
-        "metric_key": mk,
-        "metric_name": METRICS[mk].name,
-        "group_by": ["partner"],
-        "filters": {"region": region, "partner": None, "period_start":"2026-04-01","period_end":"2026-06-30"},
-    }
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ANALYTICS — NEW VERSION (includes Live tab with auto-refresh & anomaly detection)
-# ══════════════════════════════════════════════════════════════════════════════
-def page_analytics():
-# ... continues from original file ...
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ANALYTICS — NEW VERSION (includes Live tab with auto-refresh & anomaly detection)
-# ══════════════════════════════════════════════════════════════════════════════
-def page_analytics():
-# ... continues from original file ...
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ANALYTICS — NEW VERSION (includes Live tab with auto-refresh & anomaly detection)
-# ══════════════════════════════════════════════════════════════════════════════
-
 def page_analytics():
     """Analytics page — Overview · Performance · Quality · Adoption · KPI · 🔴 Live"""
 
