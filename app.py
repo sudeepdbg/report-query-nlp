@@ -1649,25 +1649,27 @@ def page_custom_dashboard():
                 pi = rs + ci2
                 if pi >= len(pins): break
                 pin = pins[pi]
-                with gcols[ci2]:
-                    st.markdown(f'<div class="db-card-header"><span class="db-card-title">{html.escape(pin["title"])}</span><span class="db-card-ts">{pin["ts"]}</span></div>', unsafe_allow_html=True)
-                    with st.container(border=True):
-                        st.markdown(f'<div style="margin-bottom:6px"><span class="db-query-pill">📍 {pin["region"]}</span><span class="db-query-pill">chart: {pin["chart_type"]}</span></div>', unsafe_allow_html=True)
-                        if pin["fig"] is not None:
-                            st.plotly_chart(pin["fig"], use_container_width=True, key=f"pin_{pi}_{hash(pin['ts'])}")
-                        else:
-                            dfp = pin["df"]
-                            if not dfp.empty:
-                                nc_ = [c for c in dfp.columns if pd.api.types.is_numeric_dtype(dfp[c])]
-                                raw = dfp[nc_[0]].iloc[0] if nc_ else dfp.iloc[0,-1]
-                                try: v=float(raw); disp=f"{v:,.0f}" if v==int(v) else f"{v:,.2f}"
-                                except: disp=str(raw)
-                                st.markdown(f'<div class="db-metric-card" style="padding:14px 18px"><div class="db-metric-value" style="font-size:2rem">{disp}</div><div class="db-metric-sub">{html.escape(pin["title"])}</div></div>', unsafe_allow_html=True)
-                        pa, pb = st.columns(2)
-                        with pa: st.download_button("📥 CSV", pin["df"].to_csv(index=False), f"pin_{pi}.csv","text/csv",key=f"pin_dl_{pi}",use_container_width=True)
-                        with pb:
-                            if st.button("✕ Unpin",key=f"pin_rm_{pi}",use_container_width=True):
-                                st.session_state.dashboard_pins.pop(pi); st.rerun()
+with gcols[ci2]:
+    st.markdown(f'<div class="db-card-header"><span class="db-card-title">{html.escape(pin["title"])}</span><span class="db-card-ts">{pin["ts"]}</span></div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown(f'<div style="margin-bottom:6px"><span class="db-query-pill">📍 {pin["region"]}</span><span class="db-query-pill">chart: {pin["chart_type"]}</span></div>', unsafe_allow_html=True)
+        if pin["fig"] is not None:
+            st.plotly_chart(pin["fig"], use_container_width=True, key=f"pin_{pi}_{hash(pin['ts'])}")
+        else:
+            dfp = pin["df"]
+            if not dfp.empty:
+                nc_ = [c for c in dfp.columns if pd.api.types.is_numeric_dtype(dfp[c])]
+                raw = dfp[nc_[0]].iloc[0] if nc_ else dfp.iloc[0,-1]
+                try: v=float(raw); disp=f"{v:,.0f}" if v==int(v) else f"{v:,.2f}"
+                except: disp=str(raw)
+                st.markdown(f'<div class="db-metric-card" style="padding:14px 18px"><div class="db-metric-value" style="font-size:2rem">{disp}</div><div class="db-metric-sub">{html.escape(pin["title"])}</div></div>', unsafe_allow_html=True)  # ← ADDED )
+            pa, pb = st.columns(2)
+            with pa: st.download_button(" CSV", pin["df"].to_csv(index=False), f"pin_{pi}.csv","text/csv",key=f"pin_dl_{pi}",use_container_width=True)
+            with pb:
+                if st.button(" Unpin",key=f"pin_rm_{pi}",use_container_width=True):
+                    st.session_state.dashboard_pins.pop(pi); st.rerun()
+                     
+         
 
 # ... end of page_custom_dashboard() ...
                         if st.button("✕ Unpin",key=f"pin_rm_{pi}",use_container_width=True):
